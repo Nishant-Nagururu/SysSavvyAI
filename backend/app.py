@@ -9,16 +9,13 @@ from mongoengine import connect
 from schemas.runModel import Run, TerraformFile
 import re
 
-MONGODB_URI = os.environ.get("MONGODB_URI")
-
-# Create a new client and connect to the server
-# db = MongoClient(MONGODB_URI, server_api=ServerApi('1'))
 
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 app = Flask(__name__)
 
 # Read environment variables
+MONGODB_URI = os.environ.get("MONGODB_URI")
 HCPT_TOKEN = os.environ.get("HCPT_TOKEN")
 HCPT_ORG = os.environ.get("HCPT_ORG")        
 HCPT_WORKSPACE = os.environ.get("HCPT_WORKSPACE")
