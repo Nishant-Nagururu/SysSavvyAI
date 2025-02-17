@@ -7,19 +7,23 @@ from openai import OpenAI
 import time
 from mongoengine import connect
 from schemas.runModel import Run, TerraformFile
+from schemas.moduleModel import Module, ModuleChunk
 import re
+from dotenv import load_dotenv
+import base64
 
+load_dotenv()
 
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 app = Flask(__name__)
 
 # Read environment variables
-MONGODB_URI = os.environ.get("MONGODB_URI")
-HCPT_TOKEN = os.environ.get("HCPT_TOKEN")
-HCPT_ORG = os.environ.get("HCPT_ORG")        
-HCPT_WORKSPACE = os.environ.get("HCPT_WORKSPACE")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+MONGODB_URI = os.getenv("MONGODB_URI")
+HCPT_TOKEN = os.getenv("HCPT_TOKEN")
+HCPT_ORG = os.getenv("HCPT_ORG")        
+HCPT_WORKSPACE = os.getenv("HCPT_WORKSPACE")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Base URL for Terraform Cloud / HCP Terraform API
 BASE_URL = "https://app.terraform.io/api/v2"
@@ -51,6 +55,133 @@ def clean_up_temp_dir(path):
     except Exception:
         pass  # best-effort cleanup
 
+def get_readme_embedding(readme_text):
+    response = client.embeddings.create(input=readme_text,
+    model="text-embedding-ada-002")
+    # The embedding is usually found in the first element of the data list.
+    embedding = response.data[0].embedding
+    return embedding
+
+@app.route("/store-readmes", methods=["POST"])
+def store_readmes():
+    """
+    Fetches repositories from the 'terraform-aws-modules' GitHub organization,
+    iterates over each repo to look for a top-level 'modules' folder, then for each
+    module folder looks for a README.md file. For each README, the content is split
+    into chunks as follows:
+      - Everything prior to the first "##" header is treated as a preamble.
+      - The preamble is cleaned by removing the string "<!-- BEGIN_TF_DOCS -->" if present.
+      - Every section that starts with a "##" header will have the cleaned preamble prepended
+        to it.
+    An embedding is computed for each chunk, and ModuleChunk documents are created and
+    referenced by a Module document.
+    """
+    GITHUB_ORG = "terraform-aws-modules"
+    GITHUB_API_URL = "https://api.github.com"
+    headers = {}
+    token = os.getenv("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"token {token}"
+
+    def get_repos(org):
+        url = f"{GITHUB_API_URL}/orgs/{org}/repos?per_page=100"
+        response = requests.get(url, headers=headers)
+        if response.status_code != 200:
+            return []
+        return response.json()
+
+    def get_contents(repo, path):
+        url = f"{GITHUB_API_URL}/repos/{GITHUB_ORG}/{repo}/contents/{path}"
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            return response.json()
+        return None
+
+    def get_readme_from_folder(repo, folder_path):
+        contents = get_contents(repo, folder_path)
+        if not contents:
+            return None, None
+        for item in contents:
+            if item["type"] == "file" and item["name"].lower() == "readme.md":
+                file_response = requests.get(item["url"], headers=headers)
+                if file_response.status_code == 200:
+                    file_data = file_response.json()
+                    if file_data.get("encoding") == "base64" and "content" in file_data:
+                        try:
+                            content_decoded = base64.b64decode(file_data["content"]).decode("utf-8")
+                        except Exception as e:
+                            print(f"Error decoding content for {repo} - {folder_path}: {e}")
+                            content_decoded = None
+                    else:
+                        content_decoded = file_data.get("content")
+                    return content_decoded, item.get("html_url")
+        return None, None
+
+    repos = get_repos(GITHUB_ORG)
+    if not repos:
+        return jsonify({"error": "No repositories found in organization."}), 404
+
+    total_modules = 0
+    for repo in repos:
+        repo_name = repo["name"]
+        modules = get_contents(repo_name, "modules")
+        if not modules:
+            continue
+        for module in modules:
+            if module["type"] != "dir":
+                continue
+            module_name = module["name"]
+            folder_path = f"modules/{module_name}"
+            readme_content, readme_url = get_readme_from_folder(repo_name, folder_path)
+            if readme_content:
+                # Build the base header.
+                header = f"# Repo: {repo_name}, Module: {module_name}"
+                # Prepend the header to the original README.
+                full_readme = header + "\n\n" + readme_content
+
+                # Look for the first occurrence of a "##" header.
+                import re
+                match = re.search(r"(?m)^##", full_readme)
+                if not match:
+                    # If no "##" sections exist, use the full_readme as a single chunk.
+                    chunks = [full_readme]
+                else:
+                    # Extract preamble as everything before the first "##" header.
+                    preamble = full_readme[:match.start()].strip()
+                    # Remove the unwanted string if it exists.
+                    preamble = preamble.replace("<!-- BEGIN_TF_DOCS -->", "").strip()
+                    # Split the remainder into sections starting with "##".
+                    sections = re.split(r"(?m)(?=^##)", full_readme[match.start():])
+                    # For every section starting with "##", prepend the cleaned preamble.
+                    chunks = [preamble + "\n\n" + section.strip() for section in sections if section.strip()]
+
+                chunk_refs = []
+                for chunk_text in chunks:
+                    try:
+                        embedding = get_readme_embedding(chunk_text)
+                    except Exception as e:
+                        print(f"Error generating embedding for {repo_name} - {module_name}: {e}")
+                        embedding = []
+                    module_chunk = ModuleChunk(
+                        repo=repo_name,
+                        module_name=module_name,
+                        chunk_content=chunk_text,
+                        embedding=embedding
+                    )
+                    module_chunk.save()
+                    chunk_refs.append(module_chunk)
+                
+                mod_doc = Module(
+                    repo=repo_name,
+                    module_name=module_name,
+                    url=readme_url or "",
+                    readme_chunks=chunk_refs
+                )
+                mod_doc.save()
+                total_modules += 1
+
+    return jsonify({"message": f"Stored README chunks for {total_modules} module(s) from GitHub."}), 200
+
 
 @app.route("/upload-terraform", methods=["POST"])
 def upload_terraform():
@@ -77,7 +208,7 @@ def upload_terraform():
         if not filename.endswith(".tf"):
             clean_up_temp_dir(temp_dir)
             return jsonify({"error": f"File {filename} is not a .tf file."}), 400
-        
+
         # Save file to temporary directory
         save_path = os.path.join(temp_dir, filename)
         f.save(save_path)
@@ -432,7 +563,7 @@ def generate_tf():
         # Remove trailing ``` if present
         if code.endswith("```"):
             code = code[:-3].strip()
-    
+
     filename = f"generated_{int(time.time())}.tf"
     try:
         with open(filename, "w") as f:
@@ -456,7 +587,7 @@ def get_cost_estimate(run_id):
         }
         run_response = requests.get(run_url, headers=headers)
         run_response.raise_for_status()
-        
+
         run_data = run_response.json()
 
         # Extract the cost estimate URL
@@ -466,7 +597,7 @@ def get_cost_estimate(run_id):
         # Second API call to get cost estimate details
         cost_response = requests.get(cost_estimate_url, headers=headers)
         cost_response.raise_for_status()
-        
+
         cost_data = cost_response.json()
 
         # Extract relevant cost estimate details
@@ -492,7 +623,7 @@ def get_cost_estimate(run_id):
         return jsonify({'error': f'Key error: {key_err}'}), 500
     except Exception as err:
         return jsonify({'error': f'An unexpected error occurred: {err}'}), 500
-    
+
 
 @app.route("/fix-errored-run/<run_id>", methods=["POST"])
 def fix_errored_run(run_id):
