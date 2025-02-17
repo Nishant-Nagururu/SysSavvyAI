@@ -1,3 +1,9 @@
+export interface SystemRequirement {
+  id: string;
+  description: string;
+  type: 'functional' | 'nonFunctional';
+}
+
 export interface AWSService {
   id: string;
   name: string;
@@ -5,13 +11,6 @@ export interface AWSService {
   description: string;
   icon: string;
   connections: string[];
-}
-
-export interface SystemRequirement {
-  id: string;
-  type: 'functional' | 'non-functional';
-  description: string;
-  relatedServices: string[];
 }
 
 export interface SystemDesign {

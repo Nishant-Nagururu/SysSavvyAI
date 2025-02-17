@@ -27,7 +27,7 @@ function App() {
               AWS System Designer
             </Typography>
             <Typography variant="h6" component="h2" gutterBottom align="center" color="text.secondary">
-              Design your cloud architecture with ease
+              Describe your system and get an AWS architecture diagram
             </Typography>
           </Box>
           <RequirementsWizard />
