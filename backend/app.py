@@ -11,6 +11,7 @@ from schemas.moduleModel import Module, ModuleChunk
 import re
 from dotenv import load_dotenv
 import base64
+from openai import OpenAI
 
 load_dotenv()
 
@@ -24,6 +25,15 @@ HCPT_TOKEN = os.getenv("HCPT_TOKEN")
 HCPT_ORG = os.getenv("HCPT_ORG")        
 HCPT_WORKSPACE = os.getenv("HCPT_WORKSPACE")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ASSISTANT_ID = os.getenv("ASSISTANT_ID")
+VECTOR_STORE_ID = os.getenv("VECTOR_STORE_ID")
+
+GITHUB_ORG = "terraform-aws-modules"
+GITHUB_API_URL = "https://api.github.com"
+GITHUB_HEADERS = {}
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+if GITHUB_TOKEN:
+    GITHUB_HEADERS["Authorization"] = f"token {GITHUB_TOKEN}"
 
 # Base URL for Terraform Cloud / HCP Terraform API
 BASE_URL = "https://app.terraform.io/api/v2"
@@ -62,125 +72,426 @@ def get_readme_embedding(readme_text):
     embedding = response.data[0].embedding
     return embedding
 
-@app.route("/store-readmes", methods=["POST"])
-def store_readmes():
+def upload_to_vector_store(file_path):
     """
-    Fetches repositories from the 'terraform-aws-modules' GitHub organization,
-    iterates over each repo to look for a top-level 'modules' folder, then for each
-    module folder looks for a README.md file. For each README, the content is split
-    into chunks as follows:
-      - Everything prior to the first "##" header is treated as a preamble.
-      - The preamble is cleaned by removing the string "<!-- BEGIN_TF_DOCS -->" if present.
-      - Every section that starts with a "##" header will have the cleaned preamble prepended
-        to it.
-    An embedding is computed for each chunk, and ModuleChunk documents are created and
-    referenced by a Module document.
+    Placeholder function for uploading a file to your vector store via the OpenAI client.
+    Replace the content of this function with your actual upload logic.
     """
-    GITHUB_ORG = "terraform-aws-modules"
-    GITHUB_API_URL = "https://api.github.com"
-    headers = {}
-    token = os.getenv("GITHUB_TOKEN")
-    if token:
-        headers["Authorization"] = f"token {token}"
-
-    def get_repos(org):
-        url = f"{GITHUB_API_URL}/orgs/{org}/repos?per_page=100"
-        response = requests.get(url, headers=headers)
-        if response.status_code != 200:
-            return []
-        return response.json()
-
-    def get_contents(repo, path):
-        url = f"{GITHUB_API_URL}/repos/{GITHUB_ORG}/{repo}/contents/{path}"
-        response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            return response.json()
+    try:
+        # Example: using a hypothetical method on openai_client.
+        response = client.files.create(file=open(file_path, "rb"),
+                                       purpose="assistants")
+        file_id = response.id
+        print("FILE ID:", file_id)
+        return file_id
+    except Exception as e:
+        print(f"Error uploading file {file_path}: {e}")
         return None
 
-    def get_readme_from_folder(repo, folder_path):
-        contents = get_contents(repo, folder_path)
-        if not contents:
-            return None, None
-        for item in contents:
-            if item["type"] == "file" and item["name"].lower() == "readme.md":
-                file_response = requests.get(item["url"], headers=headers)
-                if file_response.status_code == 200:
-                    file_data = file_response.json()
-                    if file_data.get("encoding") == "base64" and "content" in file_data:
-                        try:
-                            content_decoded = base64.b64decode(file_data["content"]).decode("utf-8")
-                        except Exception as e:
-                            print(f"Error decoding content for {repo} - {folder_path}: {e}")
-                            content_decoded = None
-                    else:
-                        content_decoded = file_data.get("content")
-                    return content_decoded, item.get("html_url")
+def get_repos(org):
+    url = f"{GITHUB_API_URL}/orgs/{org}/repos?per_page=100"
+    response = requests.get(url, headers=GITHUB_HEADERS)
+    if response.status_code != 200:
+        return []
+    return response.json()
+
+def get_contents(repo, path):
+    url = f"{GITHUB_API_URL}/repos/{GITHUB_ORG}/{repo}/contents/{path}"
+    response = requests.get(url, headers=GITHUB_HEADERS)
+    if response.status_code == 200:
+        return response.json()
+    return None
+
+def get_file_from_folder(repo, folder_path, target_file):
+    """
+    Fetches the content of target_file (e.g. main.tf) from a given folder in a repo.
+    Returns a tuple (content, html_url) if found; otherwise, (None, None).
+    """
+    contents = get_contents(repo, folder_path)
+    if not contents:
         return None, None
+    for item in contents:
+        if item["type"] == "file" and item["name"].lower() == target_file.lower():
+            file_response = requests.get(item["url"], headers=GITHUB_HEADERS)
+            if file_response.status_code == 200:
+                file_data = file_response.json()
+                if file_data.get("encoding") == "base64" and "content" in file_data:
+                    try:
+                        content_decoded = base64.b64decode(file_data["content"]).decode("utf-8")
+                    except Exception as e:
+                        print(f"Error decoding content for {repo} - {folder_path}/{target_file}: {e}")
+                        content_decoded = None
+                else:
+                    content_decoded = file_data.get("content")
+                return content_decoded, item.get("html_url")
+    return None, None
+
+@app.route("/store-readmes", methods=["POST"])
+def store_examples():
+    """
+    Fetches repositories from the 'terraform-aws-modules' GitHub organization,
+    iterates over each repo to look for a top-level 'examples' folder, then for each
+    example folder verifies that it contains main.tf, variables.tf, outputs.tf, and versions.tf.
+    Optionally, a README.md may be present. The files are combined into a single text file
+    (with README at the top if available, then variables.tf, versions.tf, main.tf, outputs.tf),
+    saved locally, and then uploaded to a vector store via the OpenAI client.
+    """
 
     repos = get_repos(GITHUB_ORG)
     if not repos:
         return jsonify({"error": "No repositories found in organization."}), 404
 
-    total_modules = 0
+    # Ensure that the directory for storing text files exists.
+    output_dir = "examples_combined"
+    os.makedirs(output_dir, exist_ok=True)
+
+    total_examples = 0
+    file_ids = []
+
+    # Required files (README is optional)
+    required_files = ["main.tf", "variables.tf", "outputs.tf", "versions.tf"]
+    optional_file = "README.md"
+
     for repo in repos:
         repo_name = repo["name"]
-        modules = get_contents(repo_name, "modules")
-        if not modules:
+        examples = get_contents(repo_name, "examples")
+        if not examples:
             continue
-        for module in modules:
-            if module["type"] != "dir":
+        for example in examples:
+            if example["type"] != "dir":
                 continue
-            module_name = module["name"]
-            folder_path = f"modules/{module_name}"
-            readme_content, readme_url = get_readme_from_folder(repo_name, folder_path)
+            example_name = example["name"]
+            folder_path = f"examples/{example_name}"
+
+            # Check that all required files exist.
+            file_contents = {}
+            skip_example = False
+            for file in required_files:
+                content, _ = get_file_from_folder(repo_name, folder_path, file)
+                if content is None:
+                    print(f"Skipping {repo_name}/{example_name}: missing required file {file}")
+                    skip_example = True
+                    break
+                file_contents[file] = content
+            if skip_example:
+                continue
+
+            # Attempt to get the optional README.
+            readme_content, _ = get_file_from_folder(repo_name, folder_path, optional_file)
+            
+            # Build header for the combined file.
+            header = f"# Repo: {repo_name}, Example: {example_name}"
+            
+            # Combine the file contents.
+            # Order: README (if exists), variables.tf, versions.tf, main.tf, outputs.tf.
+            combined = header + "\n\n"
             if readme_content:
-                # Build the base header.
-                header = f"# Repo: {repo_name}, Module: {module_name}"
-                # Prepend the header to the original README.
-                full_readme = header + "\n\n" + readme_content
+                combined += readme_content + "\n\n"
+            combined += "### variables.tf\n\n" + file_contents["variables.tf"] + "\n\n"
+            combined += "### versions.tf\n\n" + file_contents["versions.tf"] + "\n\n"
+            combined += "### main.tf\n\n" + file_contents["main.tf"] + "\n\n"
+            combined += "### outputs.tf\n\n" + file_contents["outputs.tf"]
 
-                # Look for the first occurrence of a "##" header.
-                import re
-                match = re.search(r"(?m)^##", full_readme)
-                if not match:
-                    # If no "##" sections exist, use the full_readme as a single chunk.
-                    chunks = [full_readme]
-                else:
-                    # Extract preamble as everything before the first "##" header.
-                    preamble = full_readme[:match.start()].strip()
-                    # Remove the unwanted string if it exists.
-                    preamble = preamble.replace("<!-- BEGIN_TF_DOCS -->", "").strip()
-                    # Split the remainder into sections starting with "##".
-                    sections = re.split(r"(?m)(?=^##)", full_readme[match.start():])
-                    # For every section starting with "##", prepend the cleaned preamble.
-                    chunks = [preamble + "\n\n" + section.strip() for section in sections if section.strip()]
+            # Define a file path to save the combined content.
+            safe_repo = repo_name.replace(" ", "_")
+            safe_example = example_name.replace(" ", "_")
+            file_name = f"{safe_repo}_{safe_example}_combined.txt"
+            file_path = os.path.join(output_dir, file_name)
 
-                chunk_refs = []
-                for chunk_text in chunks:
-                    try:
-                        embedding = get_readme_embedding(chunk_text)
-                    except Exception as e:
-                        print(f"Error generating embedding for {repo_name} - {module_name}: {e}")
-                        embedding = []
-                    module_chunk = ModuleChunk(
-                        repo=repo_name,
-                        module_name=module_name,
-                        chunk_content=chunk_text,
-                        embedding=embedding
-                    )
-                    module_chunk.save()
-                    chunk_refs.append(module_chunk)
-                
-                mod_doc = Module(
-                    repo=repo_name,
-                    module_name=module_name,
-                    url=readme_url or "",
-                    readme_chunks=chunk_refs
-                )
-                mod_doc.save()
-                total_modules += 1
+            try:
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(combined)
+                print(f"Saved combined file for {repo_name}/{example_name} to {file_path}")
+            except Exception as e:
+                print(f"Error writing file {file_path}: {e}")
+                continue
 
-    return jsonify({"message": f"Stored README chunks for {total_modules} module(s) from GitHub."}), 200
+            # Prepare metadata (extend this with more details as needed).
+            metadata = {
+                "repo": repo_name,
+                "example": example_name,
+                "folder_path": folder_path,
+            }
+
+            # Upload the file to the vector store.
+            file_id = upload_to_vector_store(file_path)
+            if file_id:
+                file_ids.append(file_id)
+
+            total_examples += 1
+
+    # Upload files in batches to the vector store.
+    chunk_size = 10
+    batch_results = []
+    for i in range(0, len(file_ids), chunk_size):
+        chunk = file_ids[i:min(i + chunk_size, len(file_ids))]
+        batch_add = client.beta.vector_stores.file_batches.create(
+            vector_store_id=VECTOR_STORE_ID,
+            file_ids=chunk
+        )
+        # Optionally, wait briefly before processing the next chunk.
+        time.sleep(1)
+        print("Batch status for chunk starting at index", i, ":", batch_add.status)
+        batch_results.append({"file_ids": chunk, "batch_status": batch_add.status})
+    
+    return jsonify({"message": f"Processed and uploaded combined files for {total_examples} example(s) from GitHub.", "batches": batch_results}), 200
+
+# def upload_to_vector_store(file_path):
+#     """
+#     Placeholder function for uploading a file to your vector store via the OpenAI client.
+#     Replace the content of this function with your actual upload logic.
+#     """
+#     try:
+#         # Example: using a hypothetical method on openai_client.
+#         response = client.files.create(file=open(file_path, "rb"),
+#         purpose="assistants")
+#         file_id = response.id
+#         print("FILE ID:", file_id)
+#         return file_id
+#     except Exception as e:
+#         print(f"Error uploading file {file_path}: {e}")
+#         return None
+
+# @app.route("/store-readmes", methods=["POST"])
+# def store_readmes():
+#     """
+#     Fetches repositories from the 'terraform-aws-modules' GitHub organization,
+#     iterates over each repo to look for a top-level 'modules' folder, then for each
+#     module folder looks for a README.md file. For each README, a header is added,
+#     the content is saved as a text file, and the file is uploaded to a vector store
+#     using the OpenAI client.
+#     """
+#     GITHUB_ORG = "terraform-aws-modules"
+#     GITHUB_API_URL = "https://api.github.com"
+#     headers = {}
+#     token = os.getenv("GITHUB_TOKEN")
+#     if token:
+#         headers["Authorization"] = f"token {token}"
+
+#     def get_repos(org):
+#         url = f"{GITHUB_API_URL}/orgs/{org}/repos?per_page=100"
+#         response = requests.get(url, headers=headers)
+#         if response.status_code != 200:
+#             return []
+#         return response.json()
+
+#     def get_contents(repo, path):
+#         url = f"{GITHUB_API_URL}/repos/{GITHUB_ORG}/{repo}/contents/{path}"
+#         response = requests.get(url, headers=headers)
+#         if response.status_code == 200:
+#             return response.json()
+#         return None
+
+#     def get_readme_from_folder(repo, folder_path):
+#         contents = get_contents(repo, folder_path)
+#         if not contents:
+#             return None, None
+#         for item in contents:
+#             if item["type"] == "file" and item["name"].lower() == "readme.md":
+#                 file_response = requests.get(item["url"], headers=headers)
+#                 if file_response.status_code == 200:
+#                     file_data = file_response.json()
+#                     if file_data.get("encoding") == "base64" and "content" in file_data:
+#                         try:
+#                             content_decoded = base64.b64decode(file_data["content"]).decode("utf-8")
+#                         except Exception as e:
+#                             print(f"Error decoding content for {repo} - {folder_path}: {e}")
+#                             content_decoded = None
+#                     else:
+#                         content_decoded = file_data.get("content")
+#                     return content_decoded, item.get("html_url")
+#         return None, None
+
+#     repos = get_repos(GITHUB_ORG)
+#     if not repos:
+#         return jsonify({"error": "No repositories found in organization."}), 404
+
+#     # Ensure that the directory for storing text files exists.
+#     output_dir = "readmes"
+#     os.makedirs(output_dir, exist_ok=True)
+
+#     total_modules = 0
+#     file_ids = []
+#     for repo in repos:
+#         repo_name = repo["name"]
+#         modules = get_contents(repo_name, "modules")
+#         if not modules:
+#             continue
+#         for module in modules:
+#             if module["type"] != "dir":
+#                 continue
+#             module_name = module["name"]
+#             folder_path = f"modules/{module_name}"
+#             readme_content, readme_url = get_readme_from_folder(repo_name, folder_path)
+#             if readme_content:
+#                 # Build the header.
+#                 header = f"# Repo: {repo_name}, Module: {module_name}"
+#                 # Prepend the header to the original README.
+#                 full_readme = header + "\n\n" + readme_content
+
+#                 # Define a file path to save the README.
+#                 safe_repo = repo_name.replace(" ", "_")
+#                 safe_module = module_name.replace(" ", "_")
+#                 file_name = f"{safe_repo}_{safe_module}_README.txt"
+#                 file_path = os.path.join(output_dir, file_name)
+
+#                 try:
+#                     with open(file_path, "w", encoding="utf-8") as f:
+#                         f.write(full_readme)
+#                     print(f"Saved README for {repo_name}/{module_name} to {file_path}")
+#                 except Exception as e:
+#                     print(f"Error writing file {file_path}: {e}")
+#                     continue
+
+#                 # Prepare metadata (you can extend this with more details as needed).
+#                 metadata = {
+#                     "repo": repo_name,
+#                     "module": module_name,
+#                     "readme_url": readme_url or ""
+#                 }
+
+#                 # Upload the file to the vector store.
+#                 file_id = upload_to_vector_store(file_path)
+#                 if file_id:
+#                     file_ids.append(file_id)
+
+#                 total_modules += 1
+
+#     chunk_size = 10
+#     batch_results = []
+#     for i in range(0, len(file_ids), chunk_size):
+#         chunk = file_ids[i:min(i + chunk_size, len(file_ids))]
+#         batch_add = client.beta.vector_stores.file_batches.create(
+#             vector_store_id=VECTOR_STORE_ID,
+#             file_ids=chunk
+#         )
+#         # Optionally, wait briefly before processing the next chunk
+#         time.sleep(1)
+#         print("Batch status for chunk starting at index", i, ":", batch_add.status)
+#         batch_results.append({"file_ids": chunk, "batch_status": batch_add.status})
+    
+#     return jsonify({"message": f"Processed and uploaded README for {total_modules} module(s) from GitHub.", "batches": batch_results}), 200
+
+
+# @app.route("/store-readmes", methods=["POST"])
+# def store_readmes():
+#     """
+#     Fetches repositories from the 'terraform-aws-modules' GitHub organization,
+#     iterates over each repo to look for a top-level 'modules' folder, then for each
+#     module folder looks for a README.md file. For each README, the content is split
+#     into chunks as follows:
+#       - Everything prior to the first "##" header is treated as a preamble.
+#       - The preamble is cleaned by removing the string "<!-- BEGIN_TF_DOCS -->" if present.
+#       - Every section that starts with a "##" header will have the cleaned preamble prepended
+#         to it.
+#     An embedding is computed for each chunk, and ModuleChunk documents are created and
+#     referenced by a Module document.
+#     """
+#     GITHUB_ORG = "terraform-aws-modules"
+#     GITHUB_API_URL = "https://api.github.com"
+#     headers = {}
+#     token = os.getenv("GITHUB_TOKEN")
+#     if token:
+#         headers["Authorization"] = f"token {token}"
+
+#     def get_repos(org):
+#         url = f"{GITHUB_API_URL}/orgs/{org}/repos?per_page=100"
+#         response = requests.get(url, headers=headers)
+#         if response.status_code != 200:
+#             return []
+#         return response.json()
+
+#     def get_contents(repo, path):
+#         url = f"{GITHUB_API_URL}/repos/{GITHUB_ORG}/{repo}/contents/{path}"
+#         response = requests.get(url, headers=headers)
+#         if response.status_code == 200:
+#             return response.json()
+#         return None
+
+#     def get_readme_from_folder(repo, folder_path):
+#         contents = get_contents(repo, folder_path)
+#         if not contents:
+#             return None, None
+#         for item in contents:
+#             if item["type"] == "file" and item["name"].lower() == "readme.md":
+#                 file_response = requests.get(item["url"], headers=headers)
+#                 if file_response.status_code == 200:
+#                     file_data = file_response.json()
+#                     if file_data.get("encoding") == "base64" and "content" in file_data:
+#                         try:
+#                             content_decoded = base64.b64decode(file_data["content"]).decode("utf-8")
+#                         except Exception as e:
+#                             print(f"Error decoding content for {repo} - {folder_path}: {e}")
+#                             content_decoded = None
+#                     else:
+#                         content_decoded = file_data.get("content")
+#                     return content_decoded, item.get("html_url")
+#         return None, None
+
+#     repos = get_repos(GITHUB_ORG)
+#     if not repos:
+#         return jsonify({"error": "No repositories found in organization."}), 404
+
+#     total_modules = 0
+#     for repo in repos:
+#         repo_name = repo["name"]
+#         modules = get_contents(repo_name, "modules")
+#         if not modules:
+#             continue
+#         for module in modules:
+#             if module["type"] != "dir":
+#                 continue
+#             module_name = module["name"]
+#             folder_path = f"modules/{module_name}"
+#             readme_content, readme_url = get_readme_from_folder(repo_name, folder_path)
+#             if readme_content:
+#                 # Build the base header.
+#                 header = f"# Repo: {repo_name}, Module: {module_name}"
+#                 # Prepend the header to the original README.
+#                 full_readme = header + "\n\n" + readme_content
+
+#                 # Look for the first occurrence of a "##" header.
+#                 import re
+#                 match = re.search(r"(?m)^##", full_readme)
+#                 if not match:
+#                     # If no "##" sections exist, use the full_readme as a single chunk.
+#                     chunks = [full_readme]
+#                 else:
+#                     # Extract preamble as everything before the first "##" header.
+#                     preamble = full_readme[:match.start()].strip()
+#                     # Remove the unwanted string if it exists.
+#                     preamble = preamble.replace("<!-- BEGIN_TF_DOCS -->", "").strip()
+#                     # Split the remainder into sections starting with "##".
+#                     sections = re.split(r"(?m)(?=^##)", full_readme[match.start():])
+#                     # For every section starting with "##", prepend the cleaned preamble.
+#                     chunks = [preamble + "\n\n" + section.strip() for section in sections if section.strip()]
+
+#                 chunk_refs = []
+#                 for chunk_text in chunks:
+#                     try:
+#                         embedding = get_readme_embedding(chunk_text)
+#                     except Exception as e:
+#                         print(f"Error generating embedding for {repo_name} - {module_name}: {e}")
+#                         embedding = []
+#                     module_chunk = ModuleChunk(
+#                         repo=repo_name,
+#                         module_name=module_name,
+#                         chunk_content=chunk_text,
+#                         embedding=embedding
+#                     )
+#                     module_chunk.save()
+#                     chunk_refs.append(module_chunk)
+
+#                 mod_doc = Module(
+#                     repo=repo_name,
+#                     module_name=module_name,
+#                     url=readme_url or "",
+#                     readme_chunks=chunk_refs
+#                 )
+#                 mod_doc.save()
+#                 total_modules += 1
+
+#     return jsonify({"message": f"Stored README chunks for {total_modules} module(s) from GitHub."}), 200
 
 
 @app.route("/upload-terraform", methods=["POST"])
@@ -531,7 +842,7 @@ def destroy_run():
 def generate_tf():
     """
     Takes a JSON payload with a "message" field (a prompt describing an AWS architecture),
-    sends it to the OpenAI Chat Completion API (using the assistant with id asst_oUpYpCNZ3lnt0KfMFZNCkbbf)
+    sends it to the OpenAI Chat Completion API (using the assistant with id ASSISTANT_ID)
     which is configured to return only Terraform (.tf) code.
     Saves the returned code in a uniquely named .tf file.
     """
@@ -542,7 +853,7 @@ def generate_tf():
     prompt = data["message"]
 
     thread = client.beta.threads.create(messages=[{"role": "user", "content": prompt}])
-    run = client.beta.threads.runs.create(thread_id=thread.id, assistant_id="asst_oUpYpCNZ3lnt0KfMFZNCkbbf")
+    run = client.beta.threads.runs.create(thread_id=thread.id, assistant_id="ASSISTANT_ID")
 
     while run.status != "completed":
         time.sleep(1)
@@ -703,7 +1014,7 @@ def fix_errored_run(run_id):
 
     # Send prompt to OpenAI assistant
     thread = client.beta.threads.create(messages=[{"role": "user", "content": user_prompt}])
-    run_req = client.beta.threads.runs.create(thread_id=thread.id, assistant_id="asst_oUpYpCNZ3lnt0KfMFZNCkbbf")
+    run_req = client.beta.threads.runs.create(thread_id=thread.id, assistant_id="ASSISTANT_ID")
 
     # Poll until the AI run is completed
     while run_req.status != "completed":
