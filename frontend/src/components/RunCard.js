@@ -12,6 +12,7 @@ import {
   DialogContent,
   Grid,
   IconButton,
+  CircularProgress
 } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
 
@@ -44,6 +45,7 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
   const [planLog, setPlanLog] = useState("");
   const [applyLog, setApplyLog] = useState("");
   const [loadingDetails, setLoadingDetails] = useState(false);
+  const [rerunLoading, setRerunLoading] = useState(false);
 
   // Determine the color for the status badge
   let statusColor = "success.light"; // default
@@ -97,13 +99,10 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
   // inside PreviousRunsDialog (above your LEFT HALF Grid)
 
   const handleRerun = async () => {
+    setRerunLoading(true);
     const formData = new FormData();
-  
     tfFiles.forEach(({ file_name, file_content }) => {
-      // Create a Blob from the text content
       const blob = new Blob([file_content], { type: "text/plain" });
-      // Or: const file = new File([file_content], file_name, { type: "text/plain" });
-  
       formData.append("tf_files", blob, file_name);
     });
   
@@ -118,10 +117,10 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
       onUpdate();
     } catch (err) {
       console.error("Rerun failed:", err);
+    } finally {
+      setRerunLoading(false);
     }
-  };
-  
-  
+  };    
 
   const openModal = () => {
     setOpen(true);
@@ -144,6 +143,20 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
         onUpdate();
       })
       .catch((err) => console.error("Approve error:", err));
+  };
+
+  const handleCancel = () => {
+    fetch("http://localhost:4000/cancel-run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run_id: run.id }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        console.log("Cancelled run:", data);
+        onUpdate();
+      })
+      .catch((err) => console.error("Cancel error:", err));
   };
 
   const handleDiscard = () => {
@@ -290,6 +303,16 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
                   Discard Run
                 </Button>
               )}
+              {actions["is-cancelable"] && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="error"
+                  onClick={handleCancel}
+                >
+                  Cancel Run
+                </Button>
+              )}
             </Box>
           </CardContent>
         )}
@@ -334,9 +357,16 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
                 }}
               >
                 <Typography variant="h6">Terraform Files</Typography>
-                <Button variant="contained" size="small" onClick={handleRerun}>
-                  Rerun
-                </Button>
+                <Button
+  variant="contained"
+  size="small"
+  onClick={handleRerun}
+  disabled={rerunLoading}
+  startIcon={rerunLoading ? <CircularProgress size={16} /> : null}
+>
+  {rerunLoading ? "Running…" : "Rerun"}
+</Button>
+
               </Box>
 
               <Box

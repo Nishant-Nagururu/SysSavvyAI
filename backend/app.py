@@ -549,7 +549,7 @@ def approve_run():
         return jsonify({"error": "Missing 'run_id' in JSON payload."}), 400
 
     run_id = data["run_id"]
-    comment = data.get("comment", "Approved via API.")
+    comment = data.get("comment", "Approved via API")
 
     approve_url = f"{BASE_URL}/runs/{run_id}/actions/apply"
     headers = {
@@ -579,7 +579,7 @@ def cancel_run():
         return jsonify({"error": "Missing 'run_id' in JSON payload."}), 400
 
     run_id = data["run_id"]
-    comment = data.get("comment", "Canceled via API.")
+    comment = data.get("comment", "Canceled via API")
 
     cancel_url = f"{BASE_URL}/runs/{run_id}/actions/cancel"
     headers = {
@@ -612,7 +612,7 @@ def discard_run():
         return jsonify({"error": "Missing 'run_id' in JSON payload."}), 400
 
     run_id = data["run_id"]
-    comment = data.get("comment", "Discarded via API.")
+    comment = data.get("comment", "Discarded via API")
 
     discard_url = f"{BASE_URL}/runs/{run_id}/actions/discard"
     headers = {
@@ -714,7 +714,7 @@ def destroy_run():
         return jsonify({"error": "Missing HCPT_TOKEN environment variable."}), 500
 
     data = request.get_json() or {}
-    message = data.get("message", "Destroy triggered via API.")
+    message = data.get("message", "Destroy triggered via API")
 
     try:
         workspace_id = get_workspace_id()
