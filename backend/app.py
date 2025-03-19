@@ -14,12 +14,16 @@ import re
 from dotenv import load_dotenv
 import base64
 from openai import OpenAI
+from flask_cors import CORS
+from mongoengine.errors import DoesNotExist
 
 load_dotenv()
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 app = Flask(__name__)
+
+CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}})
 
 # Read environment variables
 MONGODB_URI = os.getenv("MONGODB_URI")
@@ -545,7 +549,7 @@ def approve_run():
         return jsonify({"error": "Missing 'run_id' in JSON payload."}), 400
 
     run_id = data["run_id"]
-    comment = data.get("comment", "Approved via API.")
+    comment = data.get("comment", "Approved via API")
 
     approve_url = f"{BASE_URL}/runs/{run_id}/actions/apply"
     headers = {
@@ -575,7 +579,7 @@ def cancel_run():
         return jsonify({"error": "Missing 'run_id' in JSON payload."}), 400
 
     run_id = data["run_id"]
-    comment = data.get("comment", "Canceled via API.")
+    comment = data.get("comment", "Canceled via API")
 
     cancel_url = f"{BASE_URL}/runs/{run_id}/actions/cancel"
     headers = {
@@ -602,11 +606,13 @@ def discard_run():
         return jsonify({"error": "Missing HCPT_TOKEN environment variable."}), 500
 
     data = request.get_json()
+
+    print("DATA:", data)
     if not data or "run_id" not in data:
         return jsonify({"error": "Missing 'run_id' in JSON payload."}), 400
 
     run_id = data["run_id"]
-    comment = data.get("comment", "Discarded via API.")
+    comment = data.get("comment", "Discarded via API")
 
     discard_url = f"{BASE_URL}/runs/{run_id}/actions/discard"
     headers = {
@@ -676,6 +682,26 @@ def get_plan_log(run_id):
         return jsonify({"error": "Failed to fetch plan log.", "details": error}), 400
     return log_text, 200
 
+@app.route("/get-tf/<run_id>", methods=["GET"])
+def get_tf(run_id):
+    try:
+        run_doc = Run.objects.get(run_id=run_id)
+    except DoesNotExist:
+        return jsonify({"error": f"No run found with run_id: {run_id}"}), 404
+    except Exception as e:
+        return jsonify({"error": "Database error", "details": str(e)}), 500
+
+    if not run_doc.tf_files:
+        return jsonify({"error": "No .tf files associated with this run."}), 400
+
+    # Convert EmbeddedDocuments into plain dicts
+    tf_files = [
+        {"file_name": tf.file_name, "file_content": tf.file_content}
+        for tf in run_doc.tf_files
+    ]
+
+    return jsonify({"tf_files": tf_files}), 200
+
 
 @app.route("/destroy-run", methods=["POST"])
 def destroy_run():
@@ -688,7 +714,7 @@ def destroy_run():
         return jsonify({"error": "Missing HCPT_TOKEN environment variable."}), 500
 
     data = request.get_json() or {}
-    message = data.get("message", "Destroy triggered via API.")
+    message = data.get("message", "Destroy triggered via API")
 
     try:
         workspace_id = get_workspace_id()
@@ -856,9 +882,11 @@ def fix_errored_run():
     if provided_run_id:
         # Use run_id to query MongoDB
         try:
-            run_doc = Run.objects_get(provided_run_id)
+            run_doc = Run.objects.get(run_id=provided_run_id)
+        except DoesNotExist:
+            return jsonify({"error": f"No run found with run_id: {provided_run_id}"}), 404
         except Exception as e:
-            return jsonify({"error": f"No run found with run_id: {provided_run_id}", "details": str(e)}), 404
+            return jsonify({"error": "Database error", "details": str(e)}), 500
 
         if not run_doc.tf_files:
             return jsonify({"error": "No .tf files associated with this run."}), 400
