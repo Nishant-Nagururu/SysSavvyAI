@@ -711,7 +711,8 @@ def generate_tf():
 def get_cost_estimate(run_id):
     try:
         # First API call to get run details
-        run_url = f'https://app.terraform.io/api/v2/runs/{run_id}'
+        encoded_run_id = quote(run_id, safe='')
+        run_url = f'https://app.terraform.io/api/v2/runs/{encoded_run_id}'
         headers = {
             "Authorization": f"Bearer {HCPT_TOKEN}",
             "Content-Type": API_CONTENT_TYPE,
