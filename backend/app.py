@@ -16,6 +16,7 @@ import base64
 from openai import OpenAI
 from flask_cors import CORS
 from mongoengine.errors import DoesNotExist
+from urllib.parse import quote
 
 load_dotenv()
 
@@ -43,6 +44,10 @@ if GITHUB_TOKEN:
 
 # Base URL for Terraform Cloud / HCP Terraform API
 BASE_URL = "https://app.terraform.io/api/v2"
+API_CONTENT_TYPE = "application/vnd.api+json"
+
+MISSING_HCPT_TOKEN_RESPONSE = {"error": "Missing HCPT_TOKEN environment variable."}
+MISSING_RUN_ID_RESPONSE = {"error": "Missing 'run_id' in JSON payload."}
 
 def get_workspace_id():
     """
@@ -51,7 +56,7 @@ def get_workspace_id():
     url = f"{BASE_URL}/organizations/{HCPT_ORG}/workspaces/{HCPT_WORKSPACE}"
     headers = {
         "Authorization": f"Bearer {HCPT_TOKEN}",
-        "Content-Type": "application/vnd.api+json",
+        "Content-Type": API_CONTENT_TYPE,
     }
     resp = requests.get(url, headers=headers)
     if resp.status_code != 200:
@@ -108,6 +113,16 @@ def get_contents(repo, path):
         return response.json()
     return None
 
+def decode_file_content(file_data, repo, folder_path, target_file):
+    """Helper to decode file content from a file response."""
+    if file_data.get("encoding") == "base64" and "content" in file_data:
+        try:
+            return base64.b64decode(file_data["content"]).decode("utf-8")
+        except Exception as e:
+            print(f"Error decoding content for {repo} - {folder_path}/{target_file}: {e}")
+            return None
+    return file_data.get("content")
+
 def get_file_from_folder(repo, folder_path, target_file):
     """
     Fetches the content of target_file (e.g. main.tf) from a given folder in a repo.
@@ -116,20 +131,20 @@ def get_file_from_folder(repo, folder_path, target_file):
     contents = get_contents(repo, folder_path)
     if not contents:
         return None, None
+
+    target_file_lower = target_file.lower()
     for item in contents:
-        if item["type"] == "file" and item["name"].lower() == target_file.lower():
-            file_response = requests.get(item["url"], headers=GITHUB_HEADERS)
-            if file_response.status_code == 200:
-                file_data = file_response.json()
-                if file_data.get("encoding") == "base64" and "content" in file_data:
-                    try:
-                        content_decoded = base64.b64decode(file_data["content"]).decode("utf-8")
-                    except Exception as e:
-                        print(f"Error decoding content for {repo} - {folder_path}/{target_file}: {e}")
-                        content_decoded = None
-                else:
-                    content_decoded = file_data.get("content")
-                return content_decoded, item.get("html_url")
+        if item.get("type") != "file" or item.get("name", "").lower() != target_file_lower:
+            continue
+
+        file_response = requests.get(item["url"], headers=GITHUB_HEADERS)
+        if file_response.status_code != 200:
+            continue
+
+        file_data = file_response.json()
+        content_decoded = decode_file_content(file_data, repo, folder_path, target_file)
+        return content_decoded, item.get("html_url")
+
     return None, None
 
 @app.route("/store-readmes", methods=["POST"])
@@ -242,128 +257,6 @@ def store_examples():
     
     return jsonify({"message": f"Processed and uploaded combined files for {total_examples} example(s) from GitHub.", "batches": batch_results}), 200
 
-
-# @app.route("/upload-terraform", methods=["POST"])
-# def upload_terraform():
-#     """
-#     Accepts uploaded Terraform .tf files, packages them into a tar.gz,
-#     triggers an HCP Terraform run via the API, and stores the run details
-#     including the .tf files and their contents in MongoDB.
-#     """
-#     if not HCPT_TOKEN or not HCPT_ORG or not HCPT_WORKSPACE:
-#         return jsonify({"error": "Server missing required environment variables."}), 500
-
-#     # Collect uploaded .tf files (multiple files allowed)
-#     uploaded_files = request.files.getlist("tf_files")
-#     if not uploaded_files:
-#         return jsonify({"error": "No files received."}), 400
-
-#     # Create a temporary directory for the uploaded files
-#     temp_dir = tempfile.mkdtemp()
-#     file_paths = []
-#     tf_files_data = []  # To hold file names and contents for MongoDB
-
-#     for f in uploaded_files:
-#         filename = f.filename
-#         if not filename.endswith(".tf"):
-#             clean_up_temp_dir(temp_dir)
-#             return jsonify({"error": f"File {filename} is not a .tf file."}), 400
-
-#         # Save file to temporary directory
-#         save_path = os.path.join(temp_dir, filename)
-#         f.save(save_path)
-#         file_paths.append(save_path)
-
-#         # Read file content for MongoDB
-#         with open(save_path, "r") as file:
-#             content = file.read()
-#             tf_files_data.append(TerraformFile(file_name=filename, file_content=content))
-
-#     # Create a tar.gz archive from the .tf files
-#     tar_path = os.path.join(temp_dir, "content.tar.gz")
-#     with tarfile.open(tar_path, "w:gz") as tar:
-#         for path in file_paths:
-#             arcname = os.path.basename(path)
-#             tar.add(path, arcname=arcname)
-
-#     # Get workspace ID
-#     try:
-#         workspace_id = get_workspace_id()
-#     except Exception as e:
-#         clean_up_temp_dir(temp_dir)
-#         return jsonify({"error": str(e)}), 400
-
-#     # Create a new configuration version
-#     create_cv_url = f"{BASE_URL}/workspaces/{workspace_id}/configuration-versions"
-#     headers = {
-#         "Authorization": f"Bearer {HCPT_TOKEN}",
-#         "Content-Type": "application/vnd.api+json",
-#     }
-#     payload = {
-#         "data": {
-#             "type": "configuration-versions"
-#         }
-#     }
-#     resp = requests.post(create_cv_url, headers=headers, json=payload)
-#     if resp.status_code != 201:
-#         clean_up_temp_dir(temp_dir)
-#         return jsonify({"error": "Failed to create configuration version.", "details": resp.text}), 400
-
-#     upload_url = resp.json()["data"]["attributes"]["upload-url"]
-
-#     # Upload the tar.gz file to the signed upload URL
-#     with open(tar_path, "rb") as f:
-#         put_headers = {
-#             "Content-Type": "application/octet-stream"
-#         }
-#         put_resp = requests.put(upload_url, data=f, headers=put_headers)
-
-#     if put_resp.status_code not in (200, 201):
-#         clean_up_temp_dir(temp_dir)
-#         return jsonify({"error": "Failed to upload configuration file.", "details": put_resp.text}), 400
-
-#     # Wait briefly to ensure the run is triggered
-#     time.sleep(2)
-
-#     # Fetch the most recent run for the workspace
-#     runs_url = f"{BASE_URL}/workspaces/{workspace_id}/runs"
-#     runs_resp = requests.get(runs_url, headers=headers)
-
-#     if runs_resp.status_code != 200:
-#         clean_up_temp_dir(temp_dir)
-#         return jsonify({"error": "Failed to fetch runs.", "details": runs_resp.text}), 400
-
-#     runs_data = runs_resp.json()
-#     if not runs_data["data"]:
-#         clean_up_temp_dir(temp_dir)
-#         return jsonify({"error": "No runs found after configuration upload."}), 400
-
-#     # Get the most recent run ID
-#     latest_run = runs_data["data"][0]
-#     run_id = latest_run["id"]
-
-#     # Save run details and .tf files to MongoDB
-#     try:
-#         run_doc = Run(
-#             run_id=run_id,
-#             tf_files=tf_files_data,
-#             workspace_id=workspace_id,
-#             organization_name=HCPT_ORG
-#         )
-#         run_doc.save()
-#     except Exception as e:
-#         clean_up_temp_dir(temp_dir)
-#         return jsonify({"error": "Failed to save run details to MongoDB.", "details": str(e)}), 500
-
-#     # Clean up temporary files
-#     clean_up_temp_dir(temp_dir)
-
-#     # Return success message with run_id
-#     return jsonify({
-#         "message": "Terraform configuration uploaded successfully. Run triggered and stored in MongoDB.",
-#         "run_id": run_id
-#     }), 200
-
 @app.route("/upload-terraform", methods=["POST"])
 def upload_terraform():
     """
@@ -443,7 +336,7 @@ def upload_terraform():
     create_cv_url = f"{BASE_URL}/workspaces/{workspace_id}/configuration-versions"
     headers = {
         "Authorization": f"Bearer {HCPT_TOKEN}",
-        "Content-Type": "application/vnd.api+json",
+        "Content-Type": API_CONTENT_TYPE,
     }
     payload = {
         "data": {
@@ -526,7 +419,7 @@ def get_runs():
     runs_url = f"{BASE_URL}/workspaces/{workspace_id}/runs"
     headers = {
         "Authorization": f"Bearer {HCPT_TOKEN}",
-        "Content-Type": "application/vnd.api+json",
+        "Content-Type": API_CONTENT_TYPE,
     }
     resp = requests.get(runs_url, headers=headers)
     if resp.status_code != 200:
@@ -542,19 +435,20 @@ def approve_run():
     Expects JSON payload with a 'run_id' and an optional 'comment'.
     """
     if not HCPT_TOKEN:
-        return jsonify({"error": "Missing HCPT_TOKEN environment variable."}), 500
+        return jsonify(MISSING_HCPT_TOKEN_RESPONSE), 500
 
     data = request.get_json()
     if not data or "run_id" not in data:
-        return jsonify({"error": "Missing 'run_id' in JSON payload."}), 400
+        return jsonify(MISSING_RUN_ID_RESPONSE), 400
 
     run_id = data["run_id"]
     comment = data.get("comment", "Approved via API")
 
-    approve_url = f"{BASE_URL}/runs/{run_id}/actions/apply"
+    encoded_run_id = quote(run_id, safe='')
+    approve_url = f"{BASE_URL}/runs/{encoded_run_id}/actions/apply"
     headers = {
         "Authorization": f"Bearer {HCPT_TOKEN}",
-        "Content-Type": "application/vnd.api+json",
+        "Content-Type": API_CONTENT_TYPE,
     }
     payload = {"comment": comment}
 
@@ -572,19 +466,20 @@ def cancel_run():
     Expects JSON payload with a 'run_id' and optionally 'comment'.
     """
     if not HCPT_TOKEN:
-        return jsonify({"error": "Missing HCPT_TOKEN environment variable."}), 500
+        return jsonify(MISSING_HCPT_TOKEN_RESPONSE), 500
 
     data = request.get_json()
     if not data or "run_id" not in data:
-        return jsonify({"error": "Missing 'run_id' in JSON payload."}), 400
+        return jsonify(MISSING_RUN_ID_RESPONSE), 400
 
     run_id = data["run_id"]
     comment = data.get("comment", "Canceled via API")
 
-    cancel_url = f"{BASE_URL}/runs/{run_id}/actions/cancel"
+    encoded_run_id = quote(run_id, safe='')
+    cancel_url = f"{BASE_URL}/runs/{encoded_run_id}/actions/cancel"
     headers = {
         "Authorization": f"Bearer {HCPT_TOKEN}",
-        "Content-Type": "application/vnd.api+json",
+        "Content-Type": API_CONTENT_TYPE,
     }
     payload = {"comment": comment}
 
@@ -603,21 +498,22 @@ def discard_run():
     and optionally a 'comment'.
     """
     if not HCPT_TOKEN:
-        return jsonify({"error": "Missing HCPT_TOKEN environment variable."}), 500
+        return jsonify(MISSING_HCPT_TOKEN_RESPONSE), 500
 
     data = request.get_json()
 
     print("DATA:", data)
     if not data or "run_id" not in data:
-        return jsonify({"error": "Missing 'run_id' in JSON payload."}), 400
+        return jsonify(MISSING_RUN_ID_RESPONSE), 400
 
     run_id = data["run_id"]
     comment = data.get("comment", "Discarded via API")
 
-    discard_url = f"{BASE_URL}/runs/{run_id}/actions/discard"
+    encoded_run_id = quote(run_id, safe='')
+    discard_url = f"{BASE_URL}/runs/{encoded_run_id}/actions/discard"
     headers = {
         "Authorization": f"Bearer {HCPT_TOKEN}",
-        "Content-Type": "application/vnd.api+json",
+        "Content-Type": API_CONTENT_TYPE,
     }
     payload = {"comment": comment}
 
@@ -635,7 +531,7 @@ def fetch_log_from_attributes(endpoint_url):
     """
     headers = {
         "Authorization": f"Bearer {HCPT_TOKEN}",
-        "Content-Type": "application/vnd.api+json",
+        "Content-Type": API_CONTENT_TYPE,
     }
     resp = requests.get(endpoint_url, headers=headers)
     if resp.status_code != 200:
@@ -662,7 +558,8 @@ def get_apply_log(run_id):
     Calls the endpoint: GET https://app.terraform.io/api/v2/runs/{run_id}/apply,
     then fetches the log from the log-read-url in the returned attributes.
     """
-    endpoint_url = f"{BASE_URL}/runs/{run_id}/apply"
+    encoded_run_id = quote(run_id, safe='')
+    endpoint_url = f"{BASE_URL}/runs/{encoded_run_id}/apply"
     log_text, error = fetch_log_from_attributes(endpoint_url)
     if error:
         return jsonify({"error": "Failed to fetch apply log.", "details": error}), 400
@@ -676,7 +573,8 @@ def get_plan_log(run_id):
     Calls the endpoint: GET https://app.terraform.io/api/v2/runs/{run_id}/plan,
     then fetches the log from the log-read-url in the returned attributes.
     """
-    endpoint_url = f"{BASE_URL}/runs/{run_id}/plan"
+    encoded_run_id = quote(run_id, safe='')
+    endpoint_url = f"{BASE_URL}/runs/{encoded_run_id}/plan"
     log_text, error = fetch_log_from_attributes(endpoint_url)
     if error:
         return jsonify({"error": "Failed to fetch plan log.", "details": error}), 400
@@ -711,7 +609,7 @@ def destroy_run():
     Expects an optional JSON payload with a 'message' attribute.
     """
     if not HCPT_TOKEN:
-        return jsonify({"error": "Missing HCPT_TOKEN environment variable."}), 500
+        return jsonify(MISSING_HCPT_TOKEN_RESPONSE), 500
 
     data = request.get_json() or {}
     message = data.get("message", "Destroy triggered via API")
@@ -742,7 +640,7 @@ def destroy_run():
     url = f"{BASE_URL}/runs"
     headers = {
         "Authorization": f"Bearer {HCPT_TOKEN}",
-        "Content-Type": "application/vnd.api+json"
+        "Content-Type": API_CONTENT_TYPE
     }
 
     resp = requests.post(url, headers=headers, json=payload)
@@ -816,7 +714,7 @@ def get_cost_estimate(run_id):
         run_url = f'https://app.terraform.io/api/v2/runs/{run_id}'
         headers = {
             "Authorization": f"Bearer {HCPT_TOKEN}",
-            "Content-Type": "application/vnd.api+json",
+            "Content-Type": API_CONTENT_TYPE,
         }
         run_response = requests.get(run_url, headers=headers)
         run_response.raise_for_status()
@@ -858,6 +756,99 @@ def get_cost_estimate(run_id):
         return jsonify({'error': f'An unexpected error occurred: {err}'}), 500
 
 
+def get_tf_contents_from_run(run_doc):
+    """Combine all Terraform file contents from a run document."""
+    if not run_doc.tf_files:
+        return None
+    return "\n\n".join(
+        f"# File: {tf_file.file_name}\n{tf_file.file_content}" for tf_file in run_doc.tf_files
+    )
+
+
+def get_tf_contents_from_upload():
+    """Read and combine uploaded .tf files."""
+    uploaded_files = request.files.getlist("tf_files")
+    if not uploaded_files:
+        return None, jsonify({"error": "No run_id provided and no Terraform files uploaded."}), 400
+    tf_contents = []
+    for f in uploaded_files:
+        filename = f.filename
+        if not filename.endswith(".tf"):
+            return None, jsonify({"error": f"File {filename} is not a .tf file."}), 400
+        tf_contents.append(f.read().decode("utf-8"))
+    return "\n\n".join(tf_contents), None, None
+
+
+def fetch_run_status(provided_run_id):
+    """Fetch the Terraform run status using the provided run_id."""
+    encoded_run_id = quote(provided_run_id, safe='')
+    run_url = f"{BASE_URL}/runs/{encoded_run_id}"
+    headers = {
+        "Authorization": f"Bearer {HCPT_TOKEN}",
+        "Content-Type": API_CONTENT_TYPE,
+    }
+    run_resp = requests.get(run_url, headers=headers)
+    if run_resp.status_code != 200:
+        return None, jsonify(
+            {"error": f"Failed to fetch run {provided_run_id} from Terraform.", "details": run_resp.text}
+        ), 400
+    return run_resp.json(), None, None
+
+
+def determine_error_output(provided_run_id, json_payload):
+    """Determine the error output from JSON, form data, or from the Terraform API."""
+    error_output = ""
+    if "error_output" in json_payload and json_payload["error_output"].strip():
+        error_output = json_payload["error_output"]
+    elif "error_output" in request.form and request.form["error_output"].strip():
+        error_output = request.form["error_output"]
+    elif provided_run_id:
+        # Try fetching apply logs first; if missing, try plan logs
+        encoded_run_id = quote(provided_run_id, safe='')
+        apply_url = f"{BASE_URL}/runs/{encoded_run_id}/apply"
+        apply_logs, _ = fetch_log_from_attributes(apply_url)
+        if not apply_logs:
+            plan_url = f"{BASE_URL}/runs/{encoded_run_id}/plan"
+            plan_logs, _ = fetch_log_from_attributes(plan_url)
+            error_output = plan_logs if plan_logs else ""
+        else:
+            error_output = apply_logs
+
+        if not error_output:
+            error_output = "No apply or plan logs available."
+        else:
+            # Extract only the error message portion
+            error_match = re.search(r'(Error:|error:).*', error_output, re.DOTALL)
+            if error_match:
+                error_output = error_match.group(0)
+    else:
+        error_output = json_payload.get("error_output", "No error output provided.")
+    return error_output
+
+
+def send_prompt_to_ai(user_prompt):
+    """Send the prompt to the AI assistant and retrieve the fixed Terraform code."""
+    thread = client.beta.threads.create(messages=[{"role": "user", "content": user_prompt}])
+    run_req = client.beta.threads.runs.create(thread_id=thread.id, assistant_id=ASSISTANT_ID)
+    # Poll until the AI run is completed
+    while run_req.status != "completed":
+        time.sleep(1)
+        run_req = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run_req.id)
+    message_response = client.beta.threads.messages.list(thread_id=thread.id)
+    # Choose the latest assistant message
+    latest_message = next((msg for msg in message_response.data if msg.role == "assistant"), message_response.data[0])
+    try:
+        code = latest_message.content[0].text.value
+    except (IndexError, AttributeError):
+        code = latest_message.content[0].text if latest_message.content else ""
+    return code
+
+
+def clean_code_output(code):
+    """Remove triple backticks and any language identifiers from the code."""
+    match = re.search(r"```(?:\w+)?\n(.*?)```", code, re.DOTALL)
+    return match.group(1).strip() if match else code.strip()
+
 @app.route("/fix-errored-run", methods=["POST"])
 def fix_errored_run():
     """
@@ -865,22 +856,13 @@ def fix_errored_run():
       - A run_id (in JSON payload as "run_id") to look up a stored run from MongoDB, or
       - A file (tf_files uploaded) to use directly if no run_id is provided.
     Also checks for an "error_output" field in the JSON payload and uses that for the prompt if present.
-    
-    1. If run_id is provided, it queries the MongoDB Run collection to get .tf files and then checks that the run is errored,
-       fetching error logs from Terraform if needed.
-    2. Otherwise, it uses the uploaded file(s) as the Terraform code.
-    3. The TF code (from MongoDB or uploaded files) and error logs (from JSON or Terraform API) are combined into a prompt,
-       which is sent to the AI assistant to produce a fixed version of the configuration.
-    4. The fixed configuration is saved to a file and returned as a downloadable attachment.
     """
-    # Get JSON payload (if any)
     json_payload = request.get_json(silent=True) or {}
     provided_run_id = json_payload.get("run_id", "").strip()
-
-    # Determine source for Terraform files: from a run document (if run_id provided) or from file upload
+    
     combined_tf_contents = ""
+    # Get TF code from run document or uploaded files
     if provided_run_id:
-        # Use run_id to query MongoDB
         try:
             run_doc = Run.objects.get(run_id=provided_run_id)
         except DoesNotExist:
@@ -888,72 +870,25 @@ def fix_errored_run():
         except Exception as e:
             return jsonify({"error": "Database error", "details": str(e)}), 500
 
-        if not run_doc.tf_files:
+        combined_tf_contents = get_tf_contents_from_run(run_doc)
+        if not combined_tf_contents:
             return jsonify({"error": "No .tf files associated with this run."}), 400
 
-        combined_tf_contents = "\n\n".join(
-            [f"# File: {tf_file.file_name}\n{tf_file.file_content}" for tf_file in run_doc.tf_files]
-        )
+        run_data, error_resp, status_code = fetch_run_status(provided_run_id)
+        if error_resp:
+            return error_resp, status_code
 
-        # Also check the run status from Terraform API
-        run_url = f"{BASE_URL}/runs/{provided_run_id}"
-        headers = {
-            "Authorization": f"Bearer {HCPT_TOKEN}",
-            "Content-Type": "application/vnd.api+json",
-        }
-        run_resp = requests.get(run_url, headers=headers)
-        if run_resp.status_code != 200:
-            return jsonify({"error": f"Failed to fetch run {provided_run_id} from Terraform.", "details": run_resp.text}), 400
-
-        run_data = run_resp.json()
         status = run_data["data"]["attributes"]["status"]
         if status != "errored":
             return jsonify({"error": f"Run {provided_run_id} is not in an errored state. Current status: {status}"}), 400
     else:
-        # No run_id provided; check if file(s) are uploaded
-        uploaded_files = request.files.getlist("tf_files")
-        if not uploaded_files:
-            return jsonify({"error": "No run_id provided and no Terraform files uploaded."}), 400
+        combined_tf_contents, error_resp, status_code = get_tf_contents_from_upload()
+        if error_resp:
+            return error_resp, status_code
 
-        # Combine uploaded file contents
-        tf_contents = []
-        for f in uploaded_files:
-            filename = f.filename
-            if not filename.endswith(".tf"):
-                return jsonify({"error": f"File {filename} is not a .tf file."}), 400
-            content = f.read().decode("utf-8")
-            tf_contents.append(f"{content}")
-        combined_tf_contents = "\n\n".join(tf_contents)
+    error_output = determine_error_output(provided_run_id, json_payload)
 
-    # Determine error output: use provided error_output if present in JSON; otherwise, if run_id is provided, fetch logs.
-    error_output = ""
-    if "error_output" in json_payload and json_payload["error_output"].strip():
-        error_output = json_payload["error_output"]
-    elif "error_output" in request.form and request.form["error_output"].strip():
-        error_output = request.form["error_output"]
-    else:
-        if provided_run_id:
-            # Fetch apply logs, or plan logs if apply logs are empty
-            endpoint_url = f"{BASE_URL}/runs/{provided_run_id}/apply"
-            apply_logs, err = fetch_log_from_attributes(endpoint_url)
-            if not apply_logs:
-                plan_endpoint_url = f"{BASE_URL}/runs/{provided_run_id}/plan"
-                plan_logs, plan_err = fetch_log_from_attributes(plan_endpoint_url)
-                error_output = plan_logs if plan_logs else ""
-            else:
-                error_output = apply_logs
-
-            if not error_output:
-                error_output = "No apply or plan logs available."
-            else:
-                error_match = re.search(r'(Error:|error:).*', error_output, re.DOTALL)
-                if error_match:
-                    error_output = error_match.group(0)
-        else:
-            # No run_id provided, so error_output must be provided (or default to a placeholder)
-            error_output = json_payload.get("error_output", "No error output provided.")
-
-    # Construct prompt for AI
+    # Build the prompt for the AI assistant
     user_prompt = (
         "I have this Terraform configuration that produced an error.\n"
         "Here is the TF code:\n"
@@ -967,39 +902,9 @@ def fix_errored_run():
         "Please provide a fixed TF file that addresses the error."
     )
 
-    # print(user_prompt)
-    # Send prompt to the AI assistant
-    thread = client.beta.threads.create(messages=[{"role": "user", "content": user_prompt}])
-    run_req = client.beta.threads.runs.create(thread_id=thread.id, assistant_id=ASSISTANT_ID)
+    code = send_prompt_to_ai(user_prompt)
+    code = clean_code_output(code)
 
-    # Poll until the AI run is completed
-    while run_req.status != "completed":
-        time.sleep(1)
-        run_req = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run_req.id)
-
-    # Retrieve the fixed TF code from the assistant
-    message_response = client.beta.threads.messages.list(thread_id=thread.id)
-
-    # return jsonify({"fixed_tf": message_response.data[-1].content[0].text.value}), 200
-    latest_message = message_response.data[0]
-    for msg in message_response.data:
-        if msg.role == "assistant":
-            latest_message = msg
-
-    # print("Latest message:", latest_message)
-    try:
-        code = latest_message.content[0].text.value
-    except (IndexError, AttributeError):
-        code = latest_message.content[0].text if latest_message.content else ""
-
-    # print("CODE", code)
-
-    # Clean up triple backticks and language identifiers if present
-    match = re.search(r"```(?:\w+)?\n(.*?)```", code, re.DOTALL)
-    if match:
-        code = match.group(1).strip()
-
-    # Save the returned fixed TF code locally
     fixed_filename = f"fixed_{int(time.time())}.tf"
     try:
         with open(fixed_filename, "w") as f:
@@ -1007,7 +912,6 @@ def fix_errored_run():
     except Exception as e:
         return jsonify({"error": "Failed to write fixed TF file to disk.", "details": str(e)}), 500
 
-# Schedule file deletion after sending the response
     @after_this_request
     def remove_file(response):
         try:
@@ -1015,14 +919,13 @@ def fix_errored_run():
         except Exception as e:
             app.logger.error("Error removing file: %s", e)
         return response
-    # Return the fixed file as a downloadable attachment
+
     return send_file(
         fixed_filename,
         as_attachment=True,
         download_name=fixed_filename,
         mimetype="text/plain"
     )
-
 
 if __name__ == "__main__":
     try:
