@@ -7,7 +7,7 @@ import ReactFlow, {
   useNodesState,
   useEdgesState,
 } from 'react-flow-renderer';
-import { Box, Typography, Dialog, DialogTitle, DialogContent, DialogActions, Button } from '@mui/material';
+import { Box, Typography, Dialog, DialogTitle, DialogContent, DialogActions, Button, Grid } from '@mui/material';
 import { SystemDesign } from '../../types/types';
 import StorageIcon from '@mui/icons-material/Storage';
 import CloudIcon from '@mui/icons-material/Cloud';
@@ -22,6 +22,7 @@ import DataObjectIcon from '@mui/icons-material/DataObject';
 import MonitorIcon from '@mui/icons-material/Monitor';
 import FolderIcon from '@mui/icons-material/Folder';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import ChatBot from './ChatBot';
 
 const AWS_ICONS: { [key: string]: React.ComponentType } = {
   'EC2': MemoryIcon,
@@ -47,9 +48,10 @@ const AWS_ICONS: { [key: string]: React.ComponentType } = {
 
 interface VisualizationPreviewProps {
   systemDesign: SystemDesign;
+  onUpdateSystemDesign: (newDesign: SystemDesign) => void;
 }
 
-const VisualizationPreview: React.FC<VisualizationPreviewProps> = ({ systemDesign }) => {
+const VisualizationPreview: React.FC<VisualizationPreviewProps> = ({ systemDesign, onUpdateSystemDesign }) => {
   const [selectedService, setSelectedService] = useState<any>(null);
 
   const handleNodeClick = (event: React.MouseEvent, node: Node) => {
@@ -61,7 +63,54 @@ const VisualizationPreview: React.FC<VisualizationPreviewProps> = ({ systemDesig
     setSelectedService(null);
   };
 
-  // Create nodes from services
+  const handleUpdateSystemDesign = (newDesign: SystemDesign) => {
+    // Create nodes from updated services
+    const updatedNodes: Node[] = newDesign.services.map((service, index) => ({
+      id: service.id,
+      type: 'default',
+      data: { 
+        label: (
+          <div style={{ textAlign: 'center' }}>
+            {React.createElement(AWS_ICONS[service.icon] || AWS_ICONS['DEFAULT'], {
+              sx: { fontSize: 40, marginBottom: '8px' },
+              color: "primary"
+            } as any)}
+            <div>{service.name}</div>
+          </div>
+        )
+      },
+      position: { 
+        x: 150 + (index % 3) * 250, 
+        y: 100 + Math.floor(index / 3) * 200 
+      },
+      style: {
+        background: '#fff',
+        border: '1px solid #ddd',
+        borderRadius: '8px',
+        padding: '10px',
+        width: 180,
+        height: 100,
+        cursor: 'pointer'
+      }
+    }));
+
+    // Create edges from updated service connections
+    const updatedEdges: Edge[] = newDesign.services.flatMap(service =>
+      service.connections.map(targetId => ({
+        id: `${service.id}-${targetId}`,
+        source: service.id,
+        target: targetId,
+        type: 'smoothstep',
+        animated: true,
+        style: { stroke: '#2196f3' },
+      }))
+    );
+
+    setNodes(updatedNodes);
+    setEdges(updatedEdges);
+  };
+
+  // Create initial nodes from services
   const initialNodes: Node[] = systemDesign.services.map((service, index) => ({
     id: service.id,
     type: 'default',
@@ -69,9 +118,9 @@ const VisualizationPreview: React.FC<VisualizationPreviewProps> = ({ systemDesig
       label: (
         <div style={{ textAlign: 'center' }}>
           {React.createElement(AWS_ICONS[service.icon] || AWS_ICONS['DEFAULT'], {
-            style: { fontSize: 40, marginBottom: '8px' },
+            sx: { fontSize: 40, marginBottom: '8px' },
             color: "primary"
-          })}
+          } as any)}
           <div>{service.name}</div>
         </div>
       )
@@ -109,34 +158,28 @@ const VisualizationPreview: React.FC<VisualizationPreviewProps> = ({ systemDesig
   return (
     <Box sx={{ width: '100%', height: '70vh', border: '1px solid #ddd', borderRadius: 2 }}>
       {systemDesign.services.length > 0 ? (
-        <>
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onNodeClick={handleNodeClick}
-            fitView
-            attributionPosition="bottom-left"
-          >
-            <Controls />
-            <Background />
-          </ReactFlow>
-          
-          <Dialog open={!!selectedService} onClose={handleCloseDialog}>
-            <DialogTitle>
-              {selectedService?.name}
-            </DialogTitle>
-            <DialogContent>
-              <Typography>
-                {selectedService?.description}
-              </Typography>
-            </DialogContent>
-            <DialogActions>
-              <Button onClick={handleCloseDialog}>Close</Button>
-            </DialogActions>
-          </Dialog>
-        </>
+        <Grid container spacing={2} sx={{ height: '100%' }}>
+          <Grid item xs={9} sx={{ height: '100%' }}>
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onNodeClick={handleNodeClick}
+              fitView
+              attributionPosition="bottom-left"
+            >
+              <Controls />
+              <Background />
+            </ReactFlow>
+          </Grid>
+          <Grid item xs={3} sx={{ height: '100%', pl: 0 }}>
+            <ChatBot 
+              systemDesign={systemDesign}
+              onUpdateSystemDesign={handleUpdateSystemDesign}
+            />
+          </Grid>
+        </Grid>
       ) : (
         <Box
           sx={{
@@ -151,6 +194,20 @@ const VisualizationPreview: React.FC<VisualizationPreviewProps> = ({ systemDesig
           </Typography>
         </Box>
       )}
+
+      <Dialog open={!!selectedService} onClose={handleCloseDialog}>
+        <DialogTitle>
+          {selectedService?.name}
+        </DialogTitle>
+        <DialogContent>
+          <Typography>
+            {selectedService?.description}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseDialog}>Close</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

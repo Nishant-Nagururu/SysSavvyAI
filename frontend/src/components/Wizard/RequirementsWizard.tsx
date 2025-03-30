@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Box, Stepper, Step, StepLabel, Button, Typography, TextField, CircularProgress } from '@mui/material';
-import VisualizationPreview from './VisualizationPreview.tsx';
+import VisualizationPreview from './VisualizationPreview';
 import { SystemDesign } from '../../types/types';
 
 // Add type definitions for process.env
@@ -10,6 +10,21 @@ declare global {
       REACT_APP_GROQ_API_KEY: string;
     }
   }
+}
+
+// Add interface for GitHub tree item
+interface GitHubTreeItem {
+  path: string;
+  type: string;
+  sha: string;
+  url: string;
+}
+
+interface GitHubTreeResponse {
+  tree: GitHubTreeItem[];
+  truncated: boolean;
+  sha: string;
+  url: string;
 }
 
 const steps = ['Repository & System Description', 'System Visualization'];
@@ -69,21 +84,20 @@ PATTERNS:
 async function analyzeRepository(owner: string, repo: string): Promise<string> {
   try {
     // Get repository structure
-    const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/main?recursive=1`);
+    let response = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/main?recursive=1`);
     
     if (!response.ok) {
       // Try 'master' branch if 'main' fails
-      const masterResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/master?recursive=1`);
-      if (!masterResponse.ok) {
+      response = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/master?recursive=1`);
+      if (!response.ok) {
         throw new Error('Could not fetch repository structure');
       }
-      response = masterResponse;
     }
     
-    const data = await response.json();
+    const data: GitHubTreeResponse = await response.json();
     
     // Filter for source code files
-    const sourceFiles = data.tree.filter(file => {
+    const sourceFiles = data.tree.filter((file: GitHubTreeItem) => {
       const name = file.path.toLowerCase();
       return name.endsWith('.ts') ||
              name.endsWith('.tsx') ||
@@ -102,7 +116,7 @@ async function analyzeRepository(owner: string, repo: string): Promise<string> {
     });
 
     // Get and analyze content of each file
-    const analysisPromises = sourceFiles.map(async file => {
+    const analysisPromises = sourceFiles.map(async (file: GitHubTreeItem) => {
       try {
         const contentResponse = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/main/${file.path}`);
         let content;
@@ -173,6 +187,10 @@ export default function RequirementsWizard() {
     requirements: [],
     services: []
   });
+
+  const handleSystemDesignUpdate = (newDesign: SystemDesign) => {
+    setSystemDesign(newDesign);
+  };
 
   const handleNext = async () => {
     if (activeStep === 0) {
@@ -276,7 +294,7 @@ Service3: Brief explanation of Service3's role in this architecture`
           </Box>
         );
       case 1:
-        return <VisualizationPreview systemDesign={systemDesign} />;
+        return <VisualizationPreview systemDesign={systemDesign} onUpdateSystemDesign={handleSystemDesignUpdate} />;
       default:
         return 'Unknown step';
     }

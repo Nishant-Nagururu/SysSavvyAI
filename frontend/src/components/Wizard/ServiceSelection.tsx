@@ -13,8 +13,15 @@ import {
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { SystemDesign, AWSService } from '../../types/types';
-import { getServiceRecommendations } from '../../services/llmService.ts';
-import { getIconForService } from '../../services/iconMatcher.ts';
+import { getServiceRecommendations } from '../../services/llmService';
+import { getIconForService } from '../../services/iconMatcher';
+
+// Define interfaces for our component
+interface ServiceRecommendation {
+  service: string;
+  pros: string[];
+  cons: string[];
+}
 
 // Import AWS icons
 import EC2Icon from 'react-aws-icons/dist/aws/logo/EC2';
@@ -29,7 +36,7 @@ import SESIcon from 'react-aws-icons/dist/aws/logo/SES';
 import ElasticSearchIcon from 'react-aws-icons/dist/aws/logo/ES';
 import WAFIcon from 'react-aws-icons/dist/aws/logo/WAF';
 
-const AWS_ICONS = {
+const AWS_ICONS: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
   'Amazon EC2': EC2Icon,
   'Amazon S3': S3Icon,
   'Amazon RDS': RDSIcon,
@@ -46,17 +53,6 @@ const AWS_ICONS = {
 interface ServiceSelectionProps {
   systemDesign: SystemDesign;
   setSystemDesign: React.Dispatch<React.SetStateAction<SystemDesign>>;
-}
-
-interface ServiceRecommendation {
-  service: string;
-  pros: string[];
-  cons: string[];
-}
-
-interface ServiceIcon {
-  serviceName: string;
-  IconComponent: any;
 }
 
 export default function ServiceSelection({ systemDesign, setSystemDesign }: ServiceSelectionProps) {
@@ -78,10 +74,10 @@ export default function ServiceSelection({ systemDesign, setSystemDesign }: Serv
         setError(null);
         const recs = await getServiceRecommendations(systemDesign.name, systemDesign.requirements);
         // Filter out recommendations without specific pros/cons
-        const validRecs = recs.filter(rec => 
+        const validRecs = recs.filter((rec: ServiceRecommendation) => 
           rec.pros.length > 0 && 
           rec.cons.length > 0 && 
-          rec.pros.some(pro => pro.toLowerCase().includes(systemDesign.name.toLowerCase()) || 
+          rec.pros.some((pro: string) => pro.toLowerCase().includes(systemDesign.name.toLowerCase()) || 
             systemDesign.requirements.some(req => pro.toLowerCase().includes(req.description.toLowerCase())))
         );
         setRecommendations(validRecs);

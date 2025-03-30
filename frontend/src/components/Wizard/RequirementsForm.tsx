@@ -12,7 +12,7 @@ import {
   TextField,
   Paper
 } from '@mui/material';
-import { SystemRequirement } from '../../types/types';
+import { SystemRequirement, SystemDesign } from '../../types/types';
 
 const commonRequirements = {
   functional: [
@@ -35,8 +35,13 @@ const commonRequirements = {
   ]
 };
 
-export default function RequirementsForm({ systemDesign, setSystemDesign }) {
-  const [selectedRequirements, setSelectedRequirements] = useState([]);
+interface RequirementsFormProps {
+  systemDesign: SystemDesign;
+  setSystemDesign: React.Dispatch<React.SetStateAction<SystemDesign>>;
+}
+
+export default function RequirementsForm({ systemDesign, setSystemDesign }: RequirementsFormProps) {
+  const [selectedRequirements, setSelectedRequirements] = useState<string[]>([]);
 
   const handleRequirementSelect = (requirement: string, type: string) => {
     if (selectedRequirements.includes(requirement)) {
@@ -53,7 +58,7 @@ export default function RequirementsForm({ systemDesign, setSystemDesign }) {
           ...prev.requirements,
           {
             id: Math.random().toString(),
-            type: type === 'functional' ? 'functional' : 'non-functional',
+            type: type === 'functional' ? 'functional' : 'nonFunctional',
             description: requirement,
             relatedServices: []
           }

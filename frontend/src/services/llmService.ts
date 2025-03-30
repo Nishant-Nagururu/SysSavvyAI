@@ -68,24 +68,23 @@ export async function getServiceRecommendations(applicationType: string, require
   } catch (error) {
     console.error('Error getting recommendations:', error);
     // Return a minimal set of recommendations based on requirements
-    return requirements.map(req => {
-      const defaultServices = {
-        'User Authentication': 'Amazon Cognito',
-        'Data Storage': 'Amazon S3',
-        'API Integration': 'Amazon API Gateway',
-        'Real-time Processing': 'AWS Lambda',
-        'File Upload/Download': 'Amazon S3',
-        'Email Notifications': 'Amazon SES',
-        'Search Functionality': 'Amazon OpenSearch',
-        'High Availability': 'Amazon EC2 Auto Scaling',
-        'Scalability': 'Amazon EC2',
-        'Security': 'AWS WAF',
-        'Performance': 'Amazon CloudFront',
-        'Cost Optimization': 'AWS Cost Explorer',
-        'Disaster Recovery': 'Amazon S3',
-        'Compliance': 'AWS Config'
-      };
+    const defaultServices: Record<string, string> = {
+      'User Authentication': 'Amazon Cognito',
+      'Data Storage': 'Amazon S3',
+      'API Integration': 'Amazon API Gateway',
+      'Real-time Processing': 'AWS Lambda',
+      'File Upload/Download': 'Amazon S3',
+      'Email Notifications': 'Amazon SES',
+      'Search Functionality': 'Amazon Elasticsearch Service',
+      'Caching': 'Amazon ElastiCache',
+      'Database': 'Amazon RDS',
+      'CDN': 'Amazon CloudFront',
+      'Security': 'AWS WAF',
+      'Monitoring': 'Amazon CloudWatch',
+      'Compliance': 'AWS Config'
+    };
 
+    return requirements.map(req => {
       const service = defaultServices[req.description] || 'Amazon EC2';
       return {
         service,
