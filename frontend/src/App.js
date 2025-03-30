@@ -4,6 +4,7 @@ import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import { AppBar, Tabs, Tab, Box, Container, Typography, Toolbar } from '@mui/material';
 import RequirementsWizard from './components/Wizard/RequirementsWizard.tsx';
+import ManualRun from './ManualRun';
 import PreviousRuns from './PreviousRuns';
 
 const theme = createTheme({
@@ -37,13 +38,14 @@ function App() {
             indicatorColor="secondary"
           >
             <Tab label="New Run" />
+            <Tab label="Manual Run" />
             <Tab label="Previous Runs" />
           </Tabs>
         </Toolbar>
       </AppBar>
       <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
         <Container maxWidth="lg">
-          {tabValue === 0 ? (
+          {tabValue === 0 && (
             <>
               <Box sx={{ pt: 4, pb: 6 }}>
                 <Typography variant="h3" component="h1" gutterBottom align="center">
@@ -55,9 +57,9 @@ function App() {
               </Box>
               <RequirementsWizard />
             </>
-          ) : (
-            <PreviousRuns />
           )}
+          {tabValue === 1 && <ManualRun />}
+          {tabValue === 2 && <PreviousRuns />}
         </Container>
       </Box>
     </ThemeProvider>

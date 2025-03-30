@@ -822,7 +822,7 @@ def determine_error_output(provided_run_id, json_payload):
             if error_match:
                 error_output = error_match.group(0)
     else:
-        error_output = json_payload.get("error_output", "No error output provided.")
+        error_output = json_payload.get("error_output", "No error output provided. Please try your best to identify and fix any issues with this code.")
     return error_output
 
 

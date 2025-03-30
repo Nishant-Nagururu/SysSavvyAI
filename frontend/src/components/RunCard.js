@@ -12,7 +12,7 @@ import {
   DialogContent,
   Grid,
   IconButton,
-  CircularProgress
+  CircularProgress,
 } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
 
@@ -105,7 +105,7 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
       const blob = new Blob([file_content], { type: "text/plain" });
       formData.append("tf_files", blob, file_name);
     });
-  
+
     try {
       const res = await fetch("http://localhost:4000/upload-terraform", {
         method: "POST",
@@ -120,7 +120,7 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
     } finally {
       setRerunLoading(false);
     }
-  };    
+  };
 
   const openModal = () => {
     setOpen(true);
@@ -260,11 +260,12 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
                 Loading cost estimate...
               </Typography>
             )}
-            {costEstimates && !isDestroy && (
-              <Box mt={1}>
-                {costEstimates.map((item, index) => (
+            {costEstimates &&
+              costEstimates.length > 0 &&
+              !isDestroy &&
+              !isNaN(Number(costEstimates[0]["proposed-monthly-cost"])) && (
+                <Box mt={1}>
                   <Box
-                    key={index}
                     sx={{
                       border: "1px solid #ccc",
                       borderRadius: 1,
@@ -274,12 +275,13 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
                   >
                     <Typography variant="body2">
                       Proposed Monthly Cost: $
-                      {Number(item["proposed-monthly-cost"]).toFixed(2)}
+                      {Number(
+                        costEstimates[0]["proposed-monthly-cost"]
+                      ).toFixed(2)}
                     </Typography>
                   </Box>
-                ))}
-              </Box>
-            )}
+                </Box>
+              )}
             {costError && (
               <Typography variant="body2" color="error" mt={1}>
                 Error loading cost estimates.
@@ -358,15 +360,16 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
               >
                 <Typography variant="h6">Terraform Files</Typography>
                 <Button
-  variant="contained"
-  size="small"
-  onClick={handleRerun}
-  disabled={rerunLoading}
-  startIcon={rerunLoading ? <CircularProgress size={16} /> : null}
->
-  {rerunLoading ? "Running…" : "Rerun"}
-</Button>
-
+                  variant="contained"
+                  size="small"
+                  onClick={handleRerun}
+                  disabled={rerunLoading}
+                  startIcon={
+                    rerunLoading ? <CircularProgress size={16} /> : null
+                  }
+                >
+                  {rerunLoading ? "Running…" : "Rerun"}
+                </Button>
               </Box>
 
               <Box
