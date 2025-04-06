@@ -51,7 +51,7 @@ const PreviousRuns = () => {
       const res = await fetch("http://localhost:4000/destroy-run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({})  // even if empty
+        body: JSON.stringify({}), // even if empty
       });
       if (!res.ok) {
         const { message } = await res.json();
@@ -76,9 +76,14 @@ const PreviousRuns = () => {
 
   if (error)
     return (
-      <Typography color="error" align="center" sx={{ pt: 4 }}>
-        Error loading runs.
-      </Typography>
+      <Box sx={{ pt: 4, pb: 6 }}>
+        <Typography color="error" align="center" sx={{ pt: 4 }}>
+          Error loading runs.
+        </Typography>
+        <IconButton onClick={fetchRuns} aria-label="refresh">
+          <RefreshIcon />
+        </IconButton>
+      </Box>
     );
 
   return (

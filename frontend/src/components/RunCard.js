@@ -10,11 +10,15 @@ import {
   Dialog,
   DialogTitle,
   DialogContent,
+  DialogActions,
   Grid,
   IconButton,
   CircularProgress,
+  Collapse,
+  TextField,
 } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 
 const RunCard = ({ run, highlight = false, onUpdate }) => {
   const { attributes } = run;
@@ -33,7 +37,6 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
 
   const isDestroy = attributes["is-destroy"];
   const borderStyle = highlight ? "2px solid" : "1px solid";
-
   const borderColor = highlight ? "success.main" : "grey.300";
 
   const [costEstimates, setCostEstimates] = useState(null);
@@ -46,6 +49,16 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
   const [applyLog, setApplyLog] = useState("");
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [rerunLoading, setRerunLoading] = useState(false);
+
+  // Added state for toggling collapse sections
+  const [planLogOpen, setPlanLogOpen] = useState(false);
+  const [applyLogOpen, setApplyLogOpen] = useState(false);
+
+  // States for fix errors flow
+  const [fixLoading, setFixLoading] = useState(false);
+  const [fixModalOpen, setFixModalOpen] = useState(false);
+  const [fixedCode, setFixedCode] = useState("");
+  const [uploadLoading, setUploadLoading] = useState(false);
 
   // Determine the color for the status badge
   let statusColor = "success.light"; // default
@@ -86,7 +99,6 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
 
       const tfJson = await tfRes.json();
       setTfFiles(tfJson.tf_files || []);
-
       setPlanLog(await planRes.text());
       setApplyLog(await applyRes.text());
     } catch (err) {
@@ -95,8 +107,6 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
       setLoadingDetails(false);
     }
   };
-
-  // inside PreviousRunsDialog (above your LEFT HALF Grid)
 
   const handleRerun = async () => {
     setRerunLoading(true);
@@ -122,6 +132,60 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
     }
   };
 
+  const handleFixErrors = async () => {
+    setFixLoading(true);
+    try {
+      const res = await fetch("http://localhost:4000/fix-errored-run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run_id: run.id }),
+      });
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      // Assuming the fixed code is returned as plain text.
+      const fixed = await res.text();
+      setFixedCode(fixed);
+      setFixModalOpen(true);
+    } catch (err) {
+      console.error("Fix errors failed:", err);
+      alert(`Error: ${err.message}`);
+    } finally {
+      setFixLoading(false);
+    }
+  };
+
+  const handleUploadFixedCode = async () => {
+    setUploadLoading(true);
+    try {
+      // Create a blob from the fixedCode, and add it to a FormData as main.tf.
+      const blob = new Blob([fixedCode], { type: "text/plain" });
+      const formData = new FormData();
+      formData.append("tf_files", blob, "main.tf");
+
+      const res = await fetch("http://localhost:4000/upload-terraform", {
+        method: "POST",
+        body: formData,
+        mode: "cors",
+      });
+      if (res.status === 200) {
+        alert("Terraform file uploaded successfully!");
+        // Close both modals.
+        setFixModalOpen(false);
+        closeModal();
+        onUpdate();
+      } else {
+        const errorJson = await res.json();
+        console.error("Upload fixed code failed:", errorJson);
+        const errorMsg = errorJson.details || "Unknown error";
+        alert(`Error: ${errorMsg}`);
+      }
+    } catch (err) {
+      console.error("Upload fixed code failed:", err);
+      alert(`Error: ${err.message}`);
+    } finally {
+      setUploadLoading(false);
+    }
+  };
+
   const openModal = () => {
     setOpen(true);
     fetchDetails();
@@ -129,6 +193,10 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
 
   const closeModal = () => {
     setOpen(false);
+  };
+
+  const closeFixModal = () => {
+    setFixModalOpen(false);
   };
 
   const handleApprove = () => {
@@ -194,12 +262,9 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
               gap: 1,
             }}
           >
-            {/* Message */}
             <Typography variant="subtitle1" sx={{ fontWeight: "bold" }}>
               {message}
             </Typography>
-
-            {/* Destroy Run indicator */}
             {isDestroy && (
               <Typography
                 variant="body2"
@@ -209,19 +274,13 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
                 destroy run
               </Typography>
             )}
-
-            {/* Run ID */}
             <Typography
               variant="body2"
               sx={{ color: "text.secondary", whiteSpace: "nowrap", ml: 1 }}
             >
               #{run.id}
             </Typography>
-
-            {/* Spacer */}
             <Box sx={{ flexGrow: 1 }} />
-
-            {/* Status badge */}
             <Box
               sx={{
                 backgroundColor: statusColor,
@@ -236,8 +295,6 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
                 {status}
               </Typography>
             </Box>
-
-            {/* Timestamp */}
             <Typography
               variant="body2"
               sx={{ color: "text.secondary", whiteSpace: "nowrap", ml: 1 }}
@@ -249,7 +306,6 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
           </Box>
         </CardContent>
 
-        {/* Cost estimates / other actions */}
         {(costEstimates ||
           costError ||
           actions["is-confirmable"] ||
@@ -287,8 +343,6 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
                 Error loading cost estimates.
               </Typography>
             )}
-
-            {/* Bottom actions */}
             <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", mt: 1 }}>
               {actions["is-confirmable"] && (
                 <Button size="small" variant="outlined" onClick={handleApprove}>
@@ -359,17 +413,31 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
                 }}
               >
                 <Typography variant="h6">Terraform Files</Typography>
-                <Button
-                  variant="contained"
-                  size="small"
-                  onClick={handleRerun}
-                  disabled={rerunLoading}
-                  startIcon={
-                    rerunLoading ? <CircularProgress size={16} /> : null
-                  }
-                >
-                  {rerunLoading ? "Running…" : "Rerun"}
-                </Button>
+                {status === "errored" ? (
+                  <Button
+                    variant="contained"
+                    size="small"
+                    onClick={handleFixErrors}
+                    disabled={fixLoading}
+                    startIcon={
+                      fixLoading ? <CircularProgress size={16} /> : null
+                    }
+                  >
+                    {fixLoading ? "Fixing Errors…" : "Fix Errors"}
+                  </Button>
+                ) : (
+                  <Button
+                    variant="contained"
+                    size="small"
+                    onClick={handleRerun}
+                    disabled={rerunLoading}
+                    startIcon={
+                      rerunLoading ? <CircularProgress size={16} /> : null
+                    }
+                  >
+                    {rerunLoading ? "Running…" : "Rerun"}
+                  </Button>
+                )}
               </Box>
 
               <Box
@@ -389,7 +457,9 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
                 ) : (
                   tfFiles.map(({ file_name, file_content }) => (
                     <Box key={file_name} sx={{ mb: 2 }}>
-                      <Typography variant="subtitle2">{file_name}</Typography>
+                      <Typography variant="subtitle2">
+                        {file_name}
+                      </Typography>
                       <Typography
                         sx={{
                           whiteSpace: "pre-wrap",
@@ -404,74 +474,152 @@ const RunCard = ({ run, highlight = false, onUpdate }) => {
                 )}
               </Box>
             </Grid>
-
             {/* RIGHT HALF */}
             <Grid
               item
               xs={6}
               sx={{ display: "flex", flexDirection: "column", width: "100%" }}
             >
+              {/* Plan Log Section */}
               <Box
                 sx={{
-                  flex: 1,
-                  display: "flex",
-                  flexDirection: "column",
                   border: "1px solid",
                   borderColor: "grey.300",
                   borderRadius: 1,
                   p: 1,
                   mb: 1,
-                  overflow: "hidden",
                 }}
               >
-                <Typography variant="h6" sx={{ mb: 1 }}>
-                  Plan Log
-                </Typography>
                 <Box
                   sx={{
-                    flex: 1,
-                    overflowY: "auto",
-                    overflowX: "hidden",
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                    fontFamily: "monospace",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    mb: 1,
                   }}
                 >
-                  {planLog}
+                  <Typography variant="h6">Plan Log</Typography>
+                  <IconButton
+                    onClick={() => setPlanLogOpen((prev) => !prev)}
+                    size="small"
+                  >
+                    <ExpandMoreIcon
+                      sx={{
+                        transform: planLogOpen
+                          ? "rotate(180deg)"
+                          : "rotate(0deg)",
+                        transition: "transform 0.3s",
+                      }}
+                    />
+                  </IconButton>
                 </Box>
+                <Collapse in={planLogOpen}>
+                  <Box
+                    sx={{
+                      maxHeight: 1000,
+                      overflowY: "auto",
+                      overflowX: "hidden",
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      fontFamily: "monospace",
+                    }}
+                  >
+                    {planLog}
+                  </Box>
+                </Collapse>
               </Box>
 
+              {/* Apply Log Section */}
               <Box
                 sx={{
-                  flex: 1,
-                  display: "flex",
-                  flexDirection: "column",
                   border: "1px solid",
                   borderColor: "grey.300",
                   borderRadius: 1,
                   p: 1,
-                  overflow: "hidden",
+                  mb: 1,
                 }}
               >
-                <Typography variant="h6" sx={{ mb: 1 }}>
-                  Apply Log
-                </Typography>
                 <Box
                   sx={{
-                    flex: 1,
-                    overflowY: "auto",
-                    overflowX: "hidden",
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                    fontFamily: "monospace",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    mb: 1,
                   }}
                 >
-                  {applyLog}
+                  <Typography variant="h6">Apply Log</Typography>
+                  <IconButton
+                    onClick={() => setApplyLogOpen((prev) => !prev)}
+                    size="small"
+                  >
+                    <ExpandMoreIcon
+                      sx={{
+                        transform: applyLogOpen
+                          ? "rotate(180deg)"
+                          : "rotate(0deg)",
+                        transition: "transform 0.3s",
+                      }}
+                    />
+                  </IconButton>
                 </Box>
+                <Collapse in={applyLogOpen}>
+                  <Box
+                    sx={{
+                      maxHeight: 1000,
+                      overflowY: "auto",
+                      overflowX: "hidden",
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      fontFamily: "monospace",
+                    }}
+                  >
+                    {applyLog}
+                  </Box>
+                </Collapse>
               </Box>
             </Grid>
           </Grid>
         </DialogContent>
+      </Dialog>
+
+      {/* Fix Errors Modal */}
+      <Dialog
+        open={fixModalOpen}
+        onClose={closeFixModal}
+        fullWidth
+        maxWidth="md"
+        PaperProps={{ sx: { borderRadius: 3 } }}
+      >
+        <DialogTitle sx={{ display: "flex", justifyContent: "space-between" }}>
+          Fixed Code — {run.id}
+          <IconButton onClick={closeFixModal}>
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          <TextField
+            label="Fixed Code"
+            fullWidth
+            multiline
+            minRows={10}
+            value={fixedCode}
+            onChange={(e) => setFixedCode(e.target.value)}
+            variant="outlined"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={handleUploadFixedCode}
+            disabled={uploadLoading}
+            variant="contained"
+          >
+            {uploadLoading ? (
+              <CircularProgress size={16} />
+            ) : (
+              "Upload Fixed Code"
+            )}
+          </Button>
+        </DialogActions>
       </Dialog>
     </>
   );

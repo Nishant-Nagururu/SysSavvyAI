@@ -888,7 +888,7 @@ def fix_errored_run():
             return error_resp, status_code
 
     error_output = determine_error_output(provided_run_id, json_payload)
-
+    
     # Build the prompt for the AI assistant
     user_prompt = (
         "I have this Terraform configuration that produced an error.\n"
