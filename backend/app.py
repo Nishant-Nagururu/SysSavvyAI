@@ -687,6 +687,9 @@ def generate_tf():
     except (IndexError, AttributeError):
         code = latest_message.content[0].text if latest_message.content else ""
 
+    code = code.strip()
+    code = clean_code_output(code)
+
     filename = f"generated_{int(time.time())}.tf"
     try:
         with open(filename, "w") as f:
@@ -821,9 +824,13 @@ def determine_error_output(provided_run_id, json_payload):
             # Extract only the error message portion
             error_match = re.search(r'(Error:|error:).*', error_output, re.DOTALL)
             if error_match:
+                print("found error match")
                 error_output = error_match.group(0)
+    
     else:
         error_output = json_payload.get("error_output", "No error output provided. Please try your best to identify and fix any issues with this code.")
+    
+    print(f"Error output for run {provided_run_id}: {error_output}")
     return error_output
 
 
