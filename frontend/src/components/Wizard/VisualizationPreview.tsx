@@ -64,6 +64,7 @@ const VisualizationPreview: React.FC<VisualizationPreviewProps> = ({ systemDesig
   };
 
   const handleUpdateSystemDesign = (newDesign: SystemDesign) => {
+    onUpdateSystemDesign(newDesign);
     // Create nodes from updated services
     const updatedNodes: Node[] = newDesign.services.map((service, index) => ({
       id: service.id,
@@ -92,6 +93,7 @@ const VisualizationPreview: React.FC<VisualizationPreviewProps> = ({ systemDesig
         height: 100,
         cursor: 'pointer'
       }
+
     }));
 
     // Create edges from updated service connections

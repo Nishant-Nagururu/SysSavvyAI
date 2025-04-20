@@ -11,36 +11,61 @@ import {
   Button,
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
-import DeleteIcon from "@mui/icons-material/Delete";
 import RunCard from "./components/RunCard";
 
-const PreviousRuns = () => {
-  const [runs, setRuns] = useState([]);
-  const [latestAppliedId, setLatestAppliedId] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [destroyError, setDestroyError] = useState("");
+// Define the shape of a run and its nested attributes
+interface StatusTimestamps {
+  "queued-at": string;
+  "started-at"?: string;
+  "applied-at"?: string;
+  [key: string]: string | undefined;
+}
+
+interface RunAttributes {
+  status: string;
+  [key: string]: any;
+  "status-timestamps": StatusTimestamps;
+}
+
+interface Run {
+  id: string;
+  attributes: RunAttributes;
+}
+
+interface ApiResponse {
+  data: Run[];
+}
+
+const PreviousRuns: React.FC = () => {
+  const [runs, setRuns] = useState<Run[]>([]);
+  const [latestAppliedId, setLatestAppliedId] = useState<string | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<Error | null>(null);
+  const [destroyError, setDestroyError] = useState<string>("");
 
   const fetchRuns = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch("http://localhost:4000/runs");
-      const { data } = await res.json();
-      setRuns(data);
-      const applied = data.filter((r) => r.attributes.status === "applied");
-      if (applied.length) {
-        const latest = applied.reduce((a, b) =>
-          new Date(a.attributes["status-timestamps"]["applied-at"]) >
-          new Date(b.attributes["status-timestamps"]["applied-at"])
-            ? a
-            : b
-        );
+      if (!res.ok) throw new Error(`Error ${res.status}: ${res.statusText}`);
+      const json: ApiResponse = await res.json();
+      setRuns(json.data);
+
+      const appliedRuns = json.data.filter(
+        (r) => r.attributes.status === "applied"
+      );
+      if (appliedRuns.length) {
+        const latest = appliedRuns.reduce((a, b) => {
+          const aTime = new Date(a.attributes["status-timestamps"]["applied-at"]!);
+          const bTime = new Date(b.attributes["status-timestamps"]["applied-at"]!);
+          return aTime > bTime ? a : b;
+        });
         setLatestAppliedId(latest.id);
       }
       setError(null);
     } catch (err) {
       console.error(err);
-      setError(err);
+      setError(err as Error);
     } finally {
       setLoading(false);
     }
@@ -51,14 +76,14 @@ const PreviousRuns = () => {
       const res = await fetch("http://localhost:4000/destroy-run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}), // even if empty
+        body: JSON.stringify({}),
       });
       if (!res.ok) {
-        const { message } = await res.json();
-        throw new Error(message || "Unknown server error");
+        const body = await res.json();
+        throw new Error(body.message || "Unknown server error");
       }
       await fetchRuns();
-    } catch (err) {
+    } catch (err: any) {
       setDestroyError(err.message);
     }
   };
@@ -78,7 +103,7 @@ const PreviousRuns = () => {
     return (
       <Box sx={{ pt: 4, pb: 6 }}>
         <Typography color="error" align="center" sx={{ pt: 4 }}>
-          Error loading runs.
+          Error loading runs: {error.message}
         </Typography>
         <IconButton onClick={fetchRuns} aria-label="refresh">
           <RefreshIcon />
@@ -124,7 +149,10 @@ const PreviousRuns = () => {
       </Box>
 
       {/* Error Modal for Destroy Run */}
-      <Dialog open={Boolean(destroyError)} onClose={() => setDestroyError("")}>
+      <Dialog
+        open={Boolean(destroyError)}
+        onClose={() => setDestroyError("")}
+      >
         <DialogTitle>Failed to Destroy Run</DialogTitle>
         <DialogContent>
           <Typography>{destroyError}</Typography>
