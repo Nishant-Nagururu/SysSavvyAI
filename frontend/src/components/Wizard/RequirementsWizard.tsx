@@ -369,7 +369,7 @@ Service3: Brief explanation of Service3's role in this architecture`
         });
         
         const terraformData = await terraformResponse.json();
-        var terraformDescription = terraformData.choices[0].message.content;
+        let terraformDescription = terraformData.choices[0].message.content;
         // Print the description to console
         console.log("Terraform Script Description:", terraformDescription);
         if (terraformDescription.startsWith('Here is a concise yet detailed description')) {
