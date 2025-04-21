@@ -27,7 +27,8 @@ interface AlertState {
 
 // Function to post-process error messages (remove ANSI escape codes)
 const postProcessError = (text: string): string => {
-  const ansiRegex = /\x1b\[[0-9;]*m/g;
+  const ansiRegex = /\[[0-9;]*m/g;
+  
   return text.replace(ansiRegex, "").trim();
 };
 

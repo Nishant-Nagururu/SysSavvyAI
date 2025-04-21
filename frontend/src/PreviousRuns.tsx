@@ -59,7 +59,7 @@ const PreviousRuns: React.FC = () => {
           const aTime = new Date(a.attributes["status-timestamps"]["applied-at"]!);
           const bTime = new Date(b.attributes["status-timestamps"]["applied-at"]!);
           return aTime > bTime ? a : b;
-        });
+        }, appliedRuns[0]); // Initial value is the first element of the array        
         setLatestAppliedId(latest.id);
       }
       setError(null);
