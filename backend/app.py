@@ -9,7 +9,6 @@ from openai import OpenAI
 import time
 from mongoengine import connect
 from schemas.runModel import Run, TerraformFile
-from schemas.moduleModel import Module, ModuleChunk
 import re
 from dotenv import load_dotenv
 import base64

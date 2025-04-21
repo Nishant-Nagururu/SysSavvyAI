@@ -12,7 +12,6 @@ import {
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import DeleteIcon from "@mui/icons-material/Delete";
-import RunCard from "./components/RunCard";
 import RequirementsWizard from "./components/Wizard/RequirementsWizard";
 interface DesignArchitectureProps {
     onFinish: (description: string) => void;

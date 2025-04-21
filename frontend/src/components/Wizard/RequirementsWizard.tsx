@@ -31,68 +31,7 @@ interface GitHubTreeResponse {
 const steps = ['Repository & System Description', 'System Visualization'];
 const GROQ_API_KEY = process.env.REACT_APP_GROQ_API_KEY;
 
-async function extractFunctionInfo(content: string, filePath: string): Promise<string> {
-  try {
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${GROQ_API_KEY}`
-      },
-      body: JSON.stringify({
-        messages: [
-          {
-            role: 'system',
-            content: `You are a code analyzer. Analyze the code and provide:
-1. Overall purpose of the file
-2. Key functions and their purposes
-3. Data structures and types used
-4. External dependencies and services
-5. System design patterns identified
-
-Format your response as:
-FILE: {filename}
-PURPOSE: {file's overall purpose}
-KEY FUNCTIONS:
-- {functionName}: {purpose and key parameters}
-DATA STRUCTURES:
-- {data structure/type}: {usage}
-DEPENDENCIES:
-- {dependency}: {how it's used}
-PATTERNS:
-- {pattern}: {implementation details}
----`
-          },
-          {
-            role: 'user',
-            content: `Analyze this code from ${filePath}:\n\n${content}`
-          }
-        ],
-        model: 'llama3-70b-8192',
-        temperature: 0.1,
-        max_tokens: 2000
-      })
-    });
-
-    const data = await response.json();
-    return data.choices[0].message.content;
-  } catch (error) {
-    console.error('Error analyzing functions:', error);
-    return '';
-  }
-}
-
-function chunkArray<T>(array: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let i = 0; i < array.length; i += size) {
-    chunks.push(array.slice(i, i + size));
-  }
-  return chunks;
-}
-
-/**
- * Fetch wrapper with retry on 429
- */
+// Fetch wrapper to continue feteching if there is a rate limit
 async function fetchWithRetry(
   input: RequestInfo,
   init?: RequestInit,
@@ -150,6 +89,7 @@ function renderTree(node: TreeNode, prefix = ''): string[] {
   return lines
 }
 
+// Analyze a GitHub repository
 async function analyzeRepository(owner: string, repo: string, systemDescription: string): Promise<string> {
   try {
     // 1) Fetch full tree
@@ -244,116 +184,6 @@ a requirements.txt.
     return ''
   }
 }
-
-
-
-// async function analyzeRepository(owner: string, repo: string): Promise<string> {
-//   try {
-//     // Get repository structure
-//     let response = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/main?recursive=1`);
-    
-//     if (!response.ok) {
-//       // Try 'master' branch if 'main' fails
-//       response = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/master?recursive=1`);
-//       if (!response.ok) {
-//         throw new Error('Could not fetch repository structure');
-//       }
-//     }
-    
-//     const data: GitHubTreeResponse = await response.json();
-    
-//     // Filter for source code files
-//     const sourceFiles = data.tree.filter((file: GitHubTreeItem) => {
-//       const name = file.path.toLowerCase();
-//       return name.endsWith('.ts') ||
-//              name.endsWith('.tsx') ||
-//              name.endsWith('.js') ||
-//              name.endsWith('.jsx') ||
-//              name.endsWith('.py') ||
-//              name.endsWith('.java') ||
-//              name.endsWith('.go') ||
-//              name.endsWith('.rb') ||
-//              name.includes('dockerfile') ||
-//              name.includes('docker-compose') ||
-//              name.endsWith('.yaml') ||
-//              name.endsWith('.yml') ||
-//              name.includes('package.json') ||
-//              name.includes('requirements.txt') ||
-//              name.includes('README');
-//     });
-
-//     const BATCH_SIZE = 5;
-//     const fileAnalyses: string[] = [];
-
-//     // 2) split into chunks
-//     const chunks = chunkArray(sourceFiles, BATCH_SIZE);
-
-//     for (const chunk of chunks) {
-//       // 3) fire off up to BATCH_SIZE requests in parallel
-//       const results = await Promise.all(
-//         chunk.map(async (file: GitHubTreeItem) => {
-//           try {
-//             // fetch file contents
-//             let contentResponse = await fetch(
-//               `https://raw.githubusercontent.com/${owner}/${repo}/main/${file.path}`
-//             );
-//             if (!contentResponse.ok) {
-//               contentResponse = await fetch(
-//                 `https://raw.githubusercontent.com/${owner}/${repo}/master/${file.path}`
-//               );
-//             }
-//             const content = await contentResponse.text();
-
-//             console.log(`Analyzing file ${file.path}`);
-//             // analyze it
-//             return await extractFunctionInfo(content, file.path);
-//           } catch (err) {
-//             console.error(`Error analyzing file ${file.path}:`, err);
-//             return '';
-//           }
-//         })
-//       );
-
-//       // 4) collect non-empty analyses
-//       fileAnalyses.push(...results.filter(r => r && r.trim()));
-
-//       // 5) optional: brief pause before next batch
-//       await new Promise((res) => setTimeout(res, 500)); 
-//     }
-
-//     console.log("this is the file analyses", fileAnalyses.join('\n\n'))
-  
-//     const summaryResponse = await fetchWithRetry(
-//       'https://api.groq.com/openai/v1/chat/completions',
-//       {
-//         method: 'POST',
-//         headers: {
-//           'Content-Type': 'application/json',
-//           'Authorization': `Bearer ${GROQ_API_KEY}`
-//         },
-//         body: JSON.stringify({
-//           messages: [
-//             { role: 'system', content: `You are a system architect…` },
-//             { role: 'user',   content: `Analyze this codebase summary…\n\n${fileAnalyses.join('\n\n')}` }
-//           ],
-//           model: 'llama3-70b-8192',
-//           temperature: 0.1,
-//           max_tokens: 2000
-//         })
-//       }
-//     );
-
-//     if (!summaryResponse.ok) {
-//       throw new Error(`Summary call failed: ${summaryResponse.status}`);
-//     }
-
-//     const summaryData = await summaryResponse.json();
-//     return summaryData.choices[0].message.content;
-//   } catch (error) {
-//     console.error('Error analyzing repository:', error);
-//     return '';
-//   }
-// }
 
 // Helper function to generate a mermaid diagram string from the services
 const generateMermaidDiagram = (services: any[]): string => {
