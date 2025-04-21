@@ -229,7 +229,7 @@ const NewRun: React.FC<NewRunProps> = ({ description: initial }) => {
                 <TextField
                   label="Enter Architecture Description"
                   multiline
-                  rows={4}
+                  rows={25}
                   variant="outlined"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
