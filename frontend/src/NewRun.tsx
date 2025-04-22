@@ -250,7 +250,7 @@ const NewRun: React.FC<NewRunProps> = ({ description: initial }) => {
                 <TextField
                   label="Terraform Configuration"
                   multiline
-                  rows={10}
+                  rows={25}
                   variant="outlined"
                   value={generatedTF}
                   onChange={(e) => setGeneratedTF(e.target.value)}
